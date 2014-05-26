@@ -271,6 +271,45 @@ class WTFVectorPrinter:
     def display_hint(self):
         return 'array'
 
+class WeakPrettyPrinter():
+    STATE_MASK = 0x3
+    STATE_LIVE = 0x0
+    state_type = gdb.lookup_type("JSC::WeakImpl::State")
+    def __init__(self, val):
+        self._val = val;
+        #import pdb; pdb.set_trace()
+
+    def _get_state_int(self):
+        weak = self._val["m_impl"].dereference()["m_weakHandleOwner"]
+        addr = int(str(weak), 16)
+        return addr & self.STATE_MASK
+
+    def _get_state(self):
+        state = self._get_state_int()
+        state_val = gdb.Value(state)
+        return state_val.cast(self.state_type)
+
+    def _get_target(self):
+        # return *jsCast<T*>(m_impl->jsValue().asCell());
+        jsval = self._val["m_impl"].dereference()["m_jsValue"]
+        # WARNING: this is specific to 32 bits platforms
+        payload = jsval["u"]["asBits"]["payload"]
+        target_type = self._val.type.template_argument(0)
+        target_pointer_type = target_type.pointer()
+        pointer = gdb.Value(payload).cast(target_pointer_type)
+        if self._get_state_int() != self.STATE_LIVE:
+            return "unavailable, was (%s) %s" % (str(target_pointer_type),
+                                                 str(pointer))
+        return pointer.dereference()
+
+    def children(self):
+        yield ("m_impl", self._val["m_impl"])
+        yield ("state", self._get_state())
+        yield ("target", self._get_target())
+
+    def to_string(self):
+        return self._val.type.name + ":"
+
 def add_pretty_printers():
     pretty_printers = (
         (re.compile("^WTF::Vector<.*>$"), WTFVectorPrinter),
@@ -282,6 +321,7 @@ def add_pretty_printers():
         (re.compile("^WebCore::QualifiedName$"), WebCoreQualifiedNamePrinter),
         (re.compile("^JSC::Identifier$"), JSCIdentifierPrinter),
         (re.compile("^JSC::JSString$"), JSCJSStringPrinter),
+        (re.compile("^JSC::Weak<.*>$"), WeakPrettyPrinter),
     )
 
     def lookup_function(val):
