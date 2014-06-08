@@ -209,6 +209,11 @@ namespace JSC  {
                  return jsUndefined();
             return this[argumentOffset(argument)].jsValue();
         }
+        JSValue uncheckedArgument(size_t argument)
+        {
+            ASSERT(argument < argumentCount());
+            return getArgumentUnsafe(argument);
+        }
         void setArgument(size_t argument, JSValue value)
         {
             this[argumentOffset(argument)] = value;

@@ -40,6 +40,7 @@
 #include "Operations.h"
 #include "SamplingTool.h"
 #include "StructureRareDataInlines.h"
+#include "TestRunnerUtils.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -99,6 +100,8 @@ using namespace WTF;
 
 static bool fillBufferWithContentsOfFile(const String& fileName, Vector<char>& buffer);
 
+static EncodedJSValue JSC_HOST_CALL functionCreateProxy(ExecState*);
+
 static EncodedJSValue JSC_HOST_CALL functionPrint(ExecState*);
 static EncodedJSValue JSC_HOST_CALL functionDebug(ExecState*);
 static EncodedJSValue JSC_HOST_CALL functionDescribe(ExecState*);
@@ -114,6 +117,7 @@ static EncodedJSValue JSC_HOST_CALL functionLoad(ExecState*);
 static EncodedJSValue JSC_HOST_CALL functionCheckSyntax(ExecState*);
 static EncodedJSValue JSC_HOST_CALL functionReadline(ExecState*);
 static EncodedJSValue JSC_HOST_CALL functionPreciseTime(ExecState*);
+static EncodedJSValue JSC_HOST_CALL functionNeverInlineFunction(ExecState*);
 static NO_RETURN_WITH_VALUE EncodedJSValue JSC_HOST_CALL functionQuit(ExecState*);
 
 #if ENABLE(SAMPLING_FLAGS)
@@ -231,6 +235,8 @@ protected:
         addFunction(vm, "jscStack", functionJSCStack, 1);
         addFunction(vm, "readline", functionReadline, 0);
         addFunction(vm, "preciseTime", functionPreciseTime, 0);
+        addFunction(vm, "neverInlineFunction", functionNeverInlineFunction, 1);
+        addFunction(vm, "noInline", functionNeverInlineFunction, 1);
 #if ENABLE(SAMPLING_FLAGS)
         addFunction(vm, "setSamplingFlags", functionSetSamplingFlags, 1);
         addFunction(vm, "clearSamplingFlags", functionClearSamplingFlags, 1);
@@ -245,6 +251,7 @@ protected:
         addConstructableFunction(vm, "Int32Array", constructJSInt32Array, 1);
         addConstructableFunction(vm, "Float32Array", constructJSFloat32Array, 1);
         addConstructableFunction(vm, "Float64Array", constructJSFloat64Array, 1);
+        addFunction(vm, "createProxy", functionCreateProxy, 1);
 
         JSArray* array = constructEmptyArray(globalExec(), 0);
         for (size_t i = 0; i < arguments.size(); ++i)
@@ -352,6 +359,19 @@ EncodedJSValue JSC_HOST_CALL functionJSCStack(ExecState* exec)
     fprintf(stderr, "%s", trace.toString().utf8().data());
     return JSValue::encode(jsUndefined());
 }
+
+EncodedJSValue JSC_HOST_CALL functionCreateProxy(ExecState* exec)
+{
+    JSLockHolder lock(exec);
+    JSValue target = exec->argument(0);
+    if (!target.isObject())
+        return JSValue::encode(jsUndefined());
+    JSObject* jsTarget = asObject(target.asCell());
+    Structure* structure = JSProxy::createStructure(exec->vm(), exec->lexicalGlobalObject(), jsTarget->prototype());
+    JSProxy* proxy = JSProxy::create(exec->vm(), structure, jsTarget);
+    return JSValue::encode(proxy);
+}
+
 
 EncodedJSValue JSC_HOST_CALL functionGC(ExecState* exec)
 {
@@ -475,6 +495,11 @@ EncodedJSValue JSC_HOST_CALL functionReadline(ExecState* exec)
 EncodedJSValue JSC_HOST_CALL functionPreciseTime(ExecState*)
 {
     return JSValue::encode(jsNumber(currentTime()));
+}
+
+EncodedJSValue JSC_HOST_CALL functionNeverInlineFunction(ExecState* exec)
+{
+    return JSValue::encode(setNeverInline(exec));
 }
 
 EncodedJSValue JSC_HOST_CALL functionQuit(ExecState*)

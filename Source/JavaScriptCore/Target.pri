@@ -323,6 +323,7 @@ SOURCES += \
     runtime/Structure.cpp \
     runtime/StructureRareData.cpp \
     runtime/SymbolTable.cpp \
+    runtime/TestRunnerUtils.cpp \
     runtime/Watchdog.cpp \
     runtime/WatchdogNone.cpp \
     tools/CodeProfile.cpp \
