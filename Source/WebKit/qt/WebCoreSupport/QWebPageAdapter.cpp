@@ -107,10 +107,6 @@
 #include <QTextCharFormat>
 #include <QTouchEvent>
 #include <QWheelEvent>
-#ifndef QT_NO_OPENGL
-#include <QOpenGLContext>
-#include "GLSharedContext.h"
-#endif
 
 #if !USE(SOUP)
 #include "CookieJarQt.h"
@@ -288,14 +284,6 @@ void QWebPageAdapter::initializeWebCorePage()
 
     PageGroup::setShouldTrackVisitedLinks(true);
 }
-
-#ifndef QT_NO_OPENGL
-void QWebPageAdapter::saveGLContext()
-{
-    QOpenGLContext *c = client->getOpenGLContextIfAvailable();
-    GLSharedContext::setContext(c);
-}
-#endif
 
 QWebPageAdapter::~QWebPageAdapter()
 {

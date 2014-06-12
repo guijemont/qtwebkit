@@ -758,7 +758,7 @@ void GraphicsContext::setPlatformShouldSmoothFonts(bool)
 }
 #endif
 
-#if !USE(CG) && !USE(CAIRO) && !PLATFORM(QT)
+#if !USE(CG) && !USE(CAIRO)
 bool GraphicsContext::isAcceleratedContext() const
 {
     return false;
