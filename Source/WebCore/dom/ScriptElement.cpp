@@ -93,6 +93,11 @@ void ScriptElement::insertedInto(ContainerNode* insertionPoint)
         prepareScript(); // FIXME: Provide a real starting line number here.
 }
 
+void ScriptElement::removedFrom(ContainerNode* insertionPoint)
+{
+    stopLoadRequest();
+}
+
 void ScriptElement::childrenChanged()
 {
     if (!m_parserInserted && m_element->inDocument())

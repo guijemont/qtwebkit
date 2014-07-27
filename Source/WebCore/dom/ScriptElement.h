@@ -69,6 +69,7 @@ protected:
 
     // Helper functions used by our parent classes.
     void insertedInto(ContainerNode*);
+    void removedFrom(ContainerNode* insertionPoint);
     void childrenChanged();
     void handleSourceAttribute(const String& sourceUrl);
     void handleAsyncAttribute();
