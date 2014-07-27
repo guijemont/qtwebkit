@@ -77,6 +77,11 @@ Node::InsertionNotificationRequest HTMLScriptElement::insertedInto(ContainerNode
     return InsertionDone;
 }
 
+void removedFrom(ContainerNode* insertionPoint)
+{
+    ScriptElement::removedFrom(insertionPoint);
+}
+
 void HTMLScriptElement::setText(const String &value)
 {
     RefPtr<Node> protectFromMutationEvents(this);
