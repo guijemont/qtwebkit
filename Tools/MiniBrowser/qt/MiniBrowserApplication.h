@@ -71,7 +71,7 @@ public:
     {
         if (enabled != m_touchMockingEnabled) {
             m_touchMockingEnabled = enabled;
-            emit touchMockingEnabledChanged();
+            Q_EMIT touchMockingEnabledChanged();
         }
     }
 
