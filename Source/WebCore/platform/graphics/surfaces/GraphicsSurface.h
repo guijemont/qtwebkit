@@ -75,11 +75,10 @@ public:
 
     Flags flags() const { return m_flags; }
     IntSize size() const;
-    void setFlipTexture(bool value) { m_flipTexture = value; }
 
     static PassRefPtr<GraphicsSurface> create(const IntSize&, Flags, const PlatformGraphicsContext3D shareContext = 0);
     static PassRefPtr<GraphicsSurface> create(const IntSize&, Flags, const GraphicsSurfaceToken&);
-    void copyToGLTexture(uint32_t target, uint32_t texture, const IntRect& targetRect, const IntPoint& sourceOffset);
+    void copyToGLTexture(uint32_t target, uint32_t texture, const IntRect& targetRect, const IntPoint& sourceOffset, const IntSize& targetSize = IntSize(0,0));
     void copyFromTexture(uint32_t texture, const IntRect& sourceRect);
     void paintToTextureMapper(TextureMapper*, const FloatRect& targetRect, const TransformationMatrix&, float opacity);
     uint32_t frontBuffer();
@@ -99,7 +98,7 @@ protected:
     uint32_t platformGetTextureID();
     char* platformLock(const IntRect&, int* stride, LockOptions);
     void platformUnlock();
-    void platformCopyToGLTexture(uint32_t target, uint32_t texture, const IntRect&, const IntPoint&);
+    void platformCopyToGLTexture(uint32_t target, uint32_t texture, const IntRect& targetRect, const IntPoint& sourceOffset, const IntSize& targetSize);
     void platformCopyFromTexture(uint32_t texture, const IntRect& sourceRect);
     void platformPaintToTextureMapper(TextureMapper*, const FloatRect& targetRect, const TransformationMatrix&, float opacity);
     uint32_t platformFrontBuffer() const;
@@ -111,7 +110,6 @@ protected:
 protected:
     LockOptions m_lockOptions;
     Flags m_flags;
-    bool m_flipTexture;
 
 private:
     GraphicsSurface(const IntSize&, Flags);

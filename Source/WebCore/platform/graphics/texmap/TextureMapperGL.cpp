@@ -40,6 +40,7 @@
 #if PLATFORM(QT)
 #include <QPaintEngine>
 #include "NativeImageQt.h"
+#include <GLES2/gl2.h>
 #endif
 
 #if USE(CAIRO)
@@ -838,7 +839,11 @@ void BitmapTextureGL::didReset()
             externalFormat = GraphicsContext3D::RGBA;
     }
 
+#if PLATFORM(QT)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_textureSize.width(), m_textureSize.height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+#else
     m_context3D->texImage2DDirect(GraphicsContext3D::TEXTURE_2D, 0, internalFormat, m_textureSize.width(), m_textureSize.height(), 0, externalFormat, DEFAULT_TEXTURE_PIXEL_TRANSFER_TYPE, 0);
+#endif
 }
 
 void BitmapTextureGL::updateContentsNoSwizzle(const void* srcData, const IntRect& targetRect, const IntPoint& sourceOffset, int bytesPerLine, unsigned bytesPerPixel, Platform3DObject glFormat)

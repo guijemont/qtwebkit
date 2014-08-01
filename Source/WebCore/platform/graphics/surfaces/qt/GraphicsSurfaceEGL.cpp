@@ -10,10 +10,20 @@
 #include <qpa/qplatformnativeinterface.h>
 #include <GLES2/gl2.h>
 #include <opengl/GLDefs.h>
+#include <QOpenGLFramebufferObject>
+#include <QOpenGLPaintDevice>
+#include <QOffscreenSurface>
+#include <QOpenGLContext>
+#include <private/qopenglpaintengine_p.h>
+#include "OpenGLShims.h"
 
 namespace WebCore {
 
 #define STRINGIFY(...) #__VA_ARGS__
+
+static PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR = 0;
+static PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR = 0;
+static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC eglImageTargetTexture2DOES = 0;
 
 static GLuint loadShader(GLenum type, const GLchar *shaderSrc)
 {
@@ -34,200 +44,22 @@ static GLuint loadShader(GLenum type, const GLchar *shaderSrc)
     return shader;
 }
 
-static PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR = 0;
-static PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR = 0;
-static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC eglImageTargetTexture2DOES = 0;
-
-struct GraphicsSurfacePrivate {
-    GraphicsSurfacePrivate(IntSize size, const PlatformGraphicsContext3D shareContext)
-        : m_isReceiver(false)
-        , m_size(size)
-        , m_context(EGL_NO_CONTEXT)
-        , m_surface(EGL_NO_SURFACE)
-        , m_eglImage(EGL_NO_IMAGE_KHR)
-        , m_foreignEglImage(EGL_NO_IMAGE_KHR)
-        , m_display(EGL_NO_DISPLAY)
-        , m_origin(0)
-        , m_fbo(0)
-        , m_texture(0)
-        , m_previousContext(EGL_NO_CONTEXT)
-        , m_previousSurface(EGL_NO_SURFACE)
-        , m_shaderProgram(0)
-    {
-        initializeShaderProgram();
-
-        EGLContext eglShareContext = EGL_NO_CONTEXT;
-        if (shareContext) {
-            QPlatformNativeInterface* nativeInterface = QGuiApplication::platformNativeInterface();
-            eglShareContext = static_cast<EGLContext>(nativeInterface->nativeResourceForContext(QByteArrayLiteral("eglcontext"), shareContext));
-            if (!eglShareContext)
-                return;
+class ShaderProgram {
+public:
+    static ShaderProgram* instance() {
+        if (!m_instance) {
+            m_instance = new ShaderProgram();
         }
-
-        m_display = eglGetCurrentDisplay();
-        if (m_display == EGL_NO_DISPLAY)
-            m_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-        ASSERT(m_display != EGL_NO_DISPLAY);
-
-        EGLint egl_cfg_attribs[] = {
-            EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
-            EGL_RED_SIZE, 8,
-            EGL_GREEN_SIZE, 8,
-            EGL_BLUE_SIZE, 8,
-            EGL_ALPHA_SIZE, 8,
-            EGL_NONE
-        };
-
-        EGLConfig config;
-        EGLint n;
-        eglChooseConfig(m_display, egl_cfg_attribs, &config, 1, &n);
-        ASSERT(config);
-
-        EGLint context_attribs[] = {
-            EGL_CONTEXT_CLIENT_VERSION, 2,
-            EGL_NONE
-        };
-        m_context = eglCreateContext(m_display, config, eglShareContext, context_attribs);
-        ASSERT(m_context != EGL_NO_CONTEXT);
-
-         int pbufferAttributes[] = {
-            EGL_WIDTH, size.width(),
-            EGL_HEIGHT, size.height(),
-            EGL_NONE
-        };
-        m_surface = eglCreatePbufferSurface(m_display, config, pbufferAttributes);
-        ASSERT(m_surface != EGL_NO_SURFACE);
-
-        makeCurrent();
-
-        GLint previousFBO;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFBO);
-
-        glGenFramebuffers(1, &m_fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
-
-        glGenTextures(1, &m_origin);
-        glBindTexture(GL_TEXTURE_2D, m_origin);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, size.width(), size.height(), 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
-        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_origin, 0);
-        glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
-
-        EGLint imageAttributes[] = {
-            EGL_IMAGE_PRESERVED_KHR, EGL_TRUE,
-            EGL_NONE
-        };
-        m_eglImage = eglCreateImageKHR(m_display, m_context, EGL_GL_TEXTURE_2D_KHR, (EGLClientBuffer)(m_origin), imageAttributes);
-        if (m_eglImage == EGL_NO_IMAGE_KHR)
-            return;
-
-        doneCurrent();
+        return m_instance;
     }
 
-    GraphicsSurfacePrivate(uint32_t imageId, IntSize size)
-        : m_isReceiver(true)
-        , m_size(size)
-        , m_context(EGL_NO_CONTEXT)
-        , m_surface(EGL_NO_SURFACE)
-        , m_eglImage((EGLImageKHR)imageId)
-        , m_foreignEglImage(EGL_NO_IMAGE_KHR)
-        , m_display(EGL_NO_DISPLAY)
-        , m_origin(0)
-        , m_fbo(0)
-        , m_texture(0)
-        , m_previousContext(EGL_NO_CONTEXT)
-        , m_previousSurface(EGL_NO_SURFACE)
-        , m_shaderProgram(0)
-    {
-    }
+    GLint program() { return m_program; }
+    GLuint vertexAttr() { return m_vertexAttr; }
+    GLuint textureCoordAttr() { return m_textureCoordAttr; }
+    GLuint textureUniform() { return m_textureUniform; }
 
-    ~GraphicsSurfacePrivate()
-    {
-        if (!m_isReceiver) {
-            eglDestroyImageKHR(m_display, m_eglImage);
-            glDeleteFramebuffers(1, &m_fbo);
-            glDeleteTextures(1, &m_origin);
-            eglDestroySurface(m_display, m_surface);
-            glDeleteProgram(m_shaderProgram);
-            eglDestroyContext(m_display, m_context);
-        } else {
-            if (m_texture)
-                glDeleteTextures(1, &m_texture);
-        }
-
-    }
-
-    void copyFromTexture(uint32_t texture, const IntRect& sourceRect, bool flip)
-    {
-        makeCurrent();
-
-        GLint previousFBO;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFBO);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
-
-        drawTexture(texture, flip);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
-        doneCurrent();
-    }
-
-    void saveEGLImage(uint32_t image)
-    {
-        m_foreignEglImage = (EGLImageKHR)image;
-    }
-
-    uint32_t textureId(GraphicsSurface::Flags flags)
-    {
-        if (!m_texture) {
-            glGenTextures(1, &m_texture);
-            glBindTexture(GL_TEXTURE_2D, m_texture);
-            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            if (flags & ~GraphicsSurface::SupportsEGLImagePassthrough)
-                eglImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImage);
-        }
-
-        if (flags & GraphicsSurface::SupportsEGLImagePassthrough) {
-            glBindTexture(GL_TEXTURE_2D, m_texture);
-            eglImageTargetTexture2DOES(GL_TEXTURE_2D, m_foreignEglImage);
-        }
-
-        return m_texture;
-    }
-
-    void makeCurrent()
-    {
-        m_previousContext = eglGetCurrentContext();
-        m_previousSurface = eglGetCurrentSurface(EGL_DRAW);
-        eglMakeCurrent(m_display, m_surface, m_surface, m_context);
-    }
-
-    void doneCurrent()
-    {
-        if (m_previousContext != EGL_NO_CONTEXT) {
-            eglMakeCurrent(m_display, m_previousSurface, m_previousSurface, m_previousContext);
-            m_previousContext = EGL_NO_CONTEXT;
-            m_previousSurface = EGL_NO_SURFACE;
-        }
-    }
-
-    IntSize size() const
-    {
-        return m_size;
-    }
-
-    void initializeShaderProgram()
-    {
-        if (m_shaderProgram)
-            return;
-
+private:
+    void initialize() {
         GLchar vShaderStr[] =
             STRINGIFY(
                 attribute highp vec2 vertex;
@@ -246,8 +78,7 @@ struct GraphicsSurfacePrivate {
                 uniform sampler2D texture;
                 void main(void)
                 {
-                    highp vec3 color = texture2D(texture, textureCoords).rgb;
-                    gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+                    gl_FragColor = texture2D(texture, textureCoords);
                 }
             );
 
@@ -260,97 +91,386 @@ struct GraphicsSurfacePrivate {
         if (!vertexShader || !fragmentShader)
             return;
 
-        m_shaderProgram = glCreateProgram();
-        if (!m_shaderProgram)
+        m_program = glCreateProgram();
+        if (!m_program)
             return;
 
-        glAttachShader(m_shaderProgram, vertexShader);
-        glAttachShader(m_shaderProgram, fragmentShader);
+        glAttachShader(m_program, vertexShader);
+        glAttachShader(m_program, fragmentShader);
 
-        glLinkProgram(m_shaderProgram);
-        glGetProgramiv(m_shaderProgram, GL_LINK_STATUS, &linked);
+        glLinkProgram(m_program);
+        glGetProgramiv(m_program, GL_LINK_STATUS, &linked);
         if (!linked) {
-            glDeleteProgram(m_shaderProgram);
-            m_shaderProgram = 0;
+            glDeleteProgram(m_program);
+            m_program = 0;
         }
 
-        m_vertexAttr = glGetAttribLocation(m_shaderProgram, "vertex");
-        m_textureCoordinatesAttr = glGetAttribLocation(m_shaderProgram, "textureCoordinates");
-        m_textureUniform = glGetAttribLocation(m_shaderProgram, "texture");
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        m_vertexAttr = glGetAttribLocation(m_program, "vertex");
+        m_textureCoordAttr = glGetAttribLocation(m_program, "textureCoordinates");
+        m_textureUniform = glGetAttribLocation(m_program, "texture");
     }
 
-    void drawTexture(uint32_t texture, bool flip)
+    ShaderProgram()
+        : m_program(0)
+        , m_vertexAttr(0)
+        , m_textureCoordAttr(0)
+        , m_textureUniform(0)
     {
-        glUseProgram(m_shaderProgram);
+        initialize();
+    }
+
+    static ShaderProgram *m_instance;
+    GLint m_program;
+    GLuint m_vertexAttr;
+    GLuint m_textureCoordAttr;
+    GLuint m_textureUniform;
+};
+ShaderProgram* ShaderProgram::m_instance = NULL;
+
+class GraphicsSurfacePaintDevice : public QOpenGLPaintDevice
+{
+public:
+    GraphicsSurfacePaintDevice(IntSize size, QOpenGLContext *context, QOffscreenSurface *surface, QOpenGLFramebufferObject *fbo)
+    : QOpenGLPaintDevice(size)
+    , m_context(context)
+    , m_surface(surface)
+    , m_fbo(fbo)
+    {
+        setPaintFlipped(true);
+    }
+
+    virtual ~GraphicsSurfacePaintDevice() { }
+
+    void ensureActiveTarget()
+    {
+        if (QOpenGLContext::currentContext() != m_context)
+            m_context->makeCurrent(m_surface);
+        m_fbo->bind();
+    }
+private:
+    QOpenGLContext *m_context;
+    QOffscreenSurface *m_surface;
+    QOpenGLFramebufferObject *m_fbo;
+};
+
+class TileGLShared
+{
+public:
+    static void setShareContext (QOpenGLContext *shareContext) {
+        m_shareContext = shareContext;
+    }
+
+    static QOpenGLContext* context() {
+        if (!m_context) {
+            m_context = new QOpenGLContext();
+            m_context->setShareContext(m_shareContext);
+            m_context->create();
+        }
+        return m_context;
+    }
+
+    static QOffscreenSurface* surface() {
+        if (!m_surface) {
+            m_surface = new QOffscreenSurface();
+            m_surface->create();
+        }
+        return m_surface;
+    }
+
+    static void setSize(IntSize& size) {
+        m_size = size;
+    }
+
+    static QOpenGLFramebufferObject* fbo() {
+        if (!m_fbo) {
+            m_fbo = new QOpenGLFramebufferObject(m_size, QOpenGLFramebufferObject::CombinedDepthStencil, GL_TEXTURE_2D, GL_RGBA);
+        }
+        return m_fbo;
+    }
+
+    static GraphicsSurfacePaintDevice* paintDevice() {
+        if (!m_paintDevice) {
+            m_paintDevice = new GraphicsSurfacePaintDevice(m_size, m_context, m_surface, m_fbo);
+        }
+        return m_paintDevice;
+    }
+
+private:
+    static IntSize m_size;
+    static QOpenGLContext *m_context;
+    static QOpenGLContext *m_shareContext;
+    static QOffscreenSurface *m_surface;
+    static QOpenGLFramebufferObject *m_fbo;
+    static GraphicsSurfacePaintDevice *m_paintDevice;
+};
+IntSize TileGLShared::m_size;
+QOpenGLContext* TileGLShared::m_context = NULL;
+QOpenGLContext* TileGLShared::m_shareContext = NULL;
+QOffscreenSurface* TileGLShared::m_surface = NULL;
+QOpenGLFramebufferObject *TileGLShared::m_fbo = NULL;
+GraphicsSurfacePaintDevice* TileGLShared::m_paintDevice = NULL;
+
+struct GraphicsSurfacePrivate {
+    GraphicsSurfacePrivate(IntSize size, const PlatformGraphicsContext3D shareContext, GraphicsSurface::Flags flags)
+        : m_isReceiver(false)
+        , m_size(size)
+        , m_surface(0)
+        , m_context(0)
+        , m_eglImage(EGL_NO_IMAGE_KHR)
+        , m_foreignEglImage(EGL_NO_IMAGE_KHR)
+        , m_texture(0)
+        , m_previousContext(0)
+        , m_fbo(0)
+        , m_flags(flags)
+    {
+        if (m_flags & GraphicsSurface::SupportsEGLImagePassthrough) {
+            m_eglImage = (EGLImageKHR)1;
+            return;
+        }
+
+        if (m_flags & GraphicsSurface::SupportsCopyToTexture) {
+            TileGLShared::setShareContext(shareContext);
+            TileGLShared::setSize(size);
+            m_context = TileGLShared::context();
+            m_surface = TileGLShared::surface();
+        } else {
+            m_surface = new QOffscreenSurface;
+            m_surface->create();
+
+            m_context = new QOpenGLContext;
+            m_context->setShareContext(shareContext);
+            m_context->create();
+        }
+
+        makeCurrent();
+        initializeOpenGLShims();
+
+        glGenTextures(1, &m_texture);
+        glBindTexture(GL_TEXTURE_2D, m_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size.width(), size.height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        m_eglImage = eglCreateImageKHR(eglGetCurrentDisplay(), eglGetCurrentContext(), EGL_GL_TEXTURE_2D_KHR, (EGLClientBuffer)(m_texture), NULL);
+        if (m_eglImage == EGL_NO_IMAGE_KHR)
+            return;
+
+        if (!(m_flags & GraphicsSurface::SupportsCopyToTexture)) {
+            glGenFramebuffers(1, &m_fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_texture, 0);
+            glViewport(0, 0, m_size.width(), m_size.height());
+        }
+
+        doneCurrent();
+    }
+
+    GraphicsSurfacePrivate(uint32_t imageId, IntSize size, GraphicsSurface::Flags flags)
+        : m_isReceiver(true)
+        , m_size(size)
+        , m_surface(0)
+        , m_context(0)
+        , m_eglImage((EGLImageKHR)imageId)
+        , m_foreignEglImage(EGL_NO_IMAGE_KHR)
+        , m_texture(0)
+        , m_previousContext(0)
+        , m_fbo(0)
+        , m_flags(flags)
+    {
+    }
+
+    ~GraphicsSurfacePrivate()
+    {
+        if (!m_isReceiver) {
+            if (m_flags & GraphicsSurface::SupportsEGLImagePassthrough)
+                return;
+
+            makeCurrent();
+            eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImage);
+            glDeleteTextures(1, &m_texture);
+            if (m_flags & GraphicsSurface::SupportsCopyToTexture)
+                doneCurrent();
+            else {
+                glDeleteFramebuffers(1, &m_fbo);
+                doneCurrent();
+                delete m_context;
+                m_surface->destroy();
+                delete m_surface;
+            }
+        } else {
+            makeCurrent();
+            if (m_texture)
+                glDeleteTextures(1, &m_texture);
+            doneCurrent();
+        }
+
+    }
+
+    void copyFromTexture(uint32_t texture, const IntRect& sourceRect)
+    {
+        makeCurrent();
+
+        glBlendFunc(GL_ONE, GL_ZERO);
+        paintWithShader(texture, sourceRect, IntPoint(0, 0), m_size, true); 
+
+        doneCurrent();
+    }
+
+    void saveEGLImage(uint32_t image)
+    {
+        if (!m_context) {
+            m_context = QOpenGLContext::currentContext();
+            m_surface = static_cast<QOffscreenSurface*>(m_context->surface());
+        }
+        m_foreignEglImage = (EGLImageKHR)image;
+    }
+
+    uint32_t textureId()
+    {
+        if (!m_texture) {
+            glGenTextures(1, &m_texture);
+            glBindTexture(GL_TEXTURE_2D, m_texture);
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            if (!(m_flags & GraphicsSurface::SupportsEGLImagePassthrough))
+                eglImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImage);
+        }
+
+        if (m_flags & GraphicsSurface::SupportsEGLImagePassthrough) {
+            glBindTexture(GL_TEXTURE_2D, m_texture);
+            eglImageTargetTexture2DOES(GL_TEXTURE_2D, m_foreignEglImage);
+        }
+
+        return m_texture;
+    }
+
+    void makeCurrent()
+    {
+        if (QOpenGLContext::currentContext() != m_context) {
+            m_previousContext = QOpenGLContext::currentContext();
+            m_context->makeCurrent(m_surface);
+        }
+    }
+
+    void doneCurrent()
+    {
+        if (m_previousContext) {
+            m_previousContext->makeCurrent(m_previousContext->surface());
+            m_previousContext = 0;
+        }
+    }
+
+    IntSize size() const
+    {
+        return m_size;
+    }
+
+    void copyToGLTexture(uint32_t target, uint32_t id, const IntRect& targetRect, const IntPoint& offset, const IntSize& targetSize)
+    {
+        if (!m_context) {
+            m_context = QOpenGLContext::currentContext();
+            m_surface = static_cast<QOffscreenSurface*>(m_context->surface());
+        }
+
+        GLint previousFBO;
+        GLuint fbo;
+        uint32_t origin = textureId();
+
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFBO);
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, id, 0);
+
+        glBlendFunc(GL_ONE, GL_ZERO);
+
+        GLint viewport[4];
+        glGetIntegerv(GL_VIEWPORT, viewport);
+        glViewport(0, 0, targetSize.width(), targetSize.height());
+        paintWithShader(origin, targetRect, offset, targetSize);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
+        glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+        glDeleteFramebuffers(1, &fbo);
+    }
+
+    void paintWithShader(uint32_t texture, const IntRect& targetRect, const IntPoint& offset, const IntSize& targetSize, bool flip = false)
+    {
+        ShaderProgram *program = ShaderProgram::instance();
+
+        glUseProgram(program->program());
 
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindTexture(GL_TEXTURE_2D, texture);
 
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        GLfloat xUnitsPerPixel = 2./targetSize.width();
+        GLfloat yUnitsPerPixel = 2./targetSize.height();
+
+        GLfloat xStart = -1 + (xUnitsPerPixel * targetRect.x());
+        GLfloat xEnd =  -1 + (xUnitsPerPixel * (targetRect.width() + targetRect.x()));
+        GLfloat yStart = -1 + (yUnitsPerPixel * targetRect.y());
+        GLfloat yEnd =  -1 + (yUnitsPerPixel * (targetRect.height() + targetRect.y()));
 
         GLfloat afVertices[] = {
-            -1, -1,
-             1, -1,
-            -1,  1,
-             1,  1
+            xStart, yStart,
+            xEnd, yStart,
+            xStart, yEnd,
+            xEnd, yEnd
         };
-        glVertexAttribPointer(m_vertexAttr, 2, GL_FLOAT, GL_FALSE, 0, afVertices);
+        glVertexAttribPointer(program->vertexAttr(), 2, GL_FLOAT, GL_FALSE, 0, afVertices);
 
-        if (flip) {
+        xUnitsPerPixel = 1./m_size.width();
+        yUnitsPerPixel = 1./m_size.height();
+
+        xStart = xUnitsPerPixel * offset.x();
+        xEnd = xUnitsPerPixel * (offset.x() + targetRect.width());
+        yStart = yUnitsPerPixel * offset.y();
+        yEnd =  yUnitsPerPixel * (offset.y() + targetRect.height());
+
+        if (!flip) {
             GLfloat aftextureCoordinates[] = {
-                0, 1,
-                1, 1,
-                0, 0,
-                1, 0
+                xStart, yStart,
+                xEnd, yStart,
+                xStart, yEnd,
+                xEnd, yEnd
             };
-            glVertexAttribPointer(m_textureCoordinatesAttr, 2, GL_FLOAT, GL_FALSE, 0, aftextureCoordinates);
+            glVertexAttribPointer(program->textureCoordAttr(), 2, GL_FLOAT, GL_FALSE, 0, aftextureCoordinates);
         } else {
             GLfloat aftextureCoordinates[] = {
-                0, 0,
-                1, 0,
-                0, 1,
-                1, 1
+                xStart, yEnd,
+                xEnd, yEnd,
+                xStart, yStart,
+                xEnd, yStart
             };
-            glVertexAttribPointer(m_textureCoordinatesAttr, 2, GL_FLOAT, GL_FALSE, 0, aftextureCoordinates);
+            glVertexAttribPointer(program->textureCoordAttr(), 2, GL_FLOAT, GL_FALSE, 0, aftextureCoordinates);
         }
 
-        glUniform1i(m_textureUniform, 0);
+        glUniform1i(program->textureUniform(), 0);
 
-        glEnableVertexAttribArray(m_vertexAttr);
-        glEnableVertexAttribArray(m_textureCoordinatesAttr);
+        glEnableVertexAttribArray(program->vertexAttr());
+        glEnableVertexAttribArray(program->textureCoordAttr());
 
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-        glDisableVertexAttribArray(m_vertexAttr);
-        glDisableVertexAttribArray(m_textureCoordinatesAttr);
+        glDisableVertexAttribArray(program->vertexAttr());
+        glDisableVertexAttribArray(program->textureCoordAttr());
 
         glBindTexture(GL_TEXTURE_2D, 0);
     }
 
     bool m_isReceiver;
     IntSize m_size;
-    EGLContext m_context;
-    EGLSurface m_surface;
+    QOffscreenSurface *m_surface;
+    QOpenGLContext *m_context;
     EGLImageKHR m_eglImage;
     EGLImageKHR m_foreignEglImage;
-    EGLDisplay m_display;
-    GLuint m_origin;
-    GLuint m_fbo;
     GLuint m_texture;
-    EGLContext m_previousContext;
-    EGLSurface m_previousSurface;
-    GLint m_shaderProgram;
-    GLuint m_vertexAttr;
-    GLuint m_textureCoordinatesAttr;
-    GLuint m_textureUniform;
+    QOpenGLContext *m_previousContext;
+    GLuint m_fbo;
+    GraphicsSurface::Flags m_flags;
 };
 
 static bool resolveGLMethods()
@@ -376,11 +496,12 @@ GraphicsSurfaceToken GraphicsSurface::platformExport()
 
 uint32_t GraphicsSurface::platformGetTextureID()
 {
-    return m_private->textureId(flags());
+    return m_private->textureId();
 }
 
-void GraphicsSurface::platformCopyToGLTexture(uint32_t /*target*/, uint32_t /*id*/, const IntRect& /*targetRect*/, const IntPoint& /*offset*/)
+void GraphicsSurface::platformCopyToGLTexture(uint32_t target, uint32_t id, const IntRect& targetRect, const IntPoint& offset, const IntSize& targetSize)
 {
+    m_private->copyToGLTexture(target, id, targetRect, offset, targetSize);
 }
 
 void GraphicsSurface::platformCopyFromTexture(uint32_t texture, const IntRect& sourceRect)
@@ -388,12 +509,17 @@ void GraphicsSurface::platformCopyFromTexture(uint32_t texture, const IntRect& s
     if (flags() & SupportsEGLImagePassthrough)
         m_private->saveEGLImage(texture);
     else
-        m_private->copyFromTexture(texture, sourceRect, m_flipTexture);
+        m_private->copyFromTexture(texture, sourceRect);
 }
 
 
 void GraphicsSurface::platformPaintToTextureMapper(TextureMapper* textureMapper, const FloatRect& targetRect, const TransformationMatrix& transform, float opacity)
 {
+    if (!m_private->m_context) {
+        m_private->m_context = QOpenGLContext::currentContext();
+        m_private->m_surface = static_cast<QOffscreenSurface*>(m_private->m_context->surface());
+    }
+
     TextureMapperGL* texMapGL = static_cast<TextureMapperGL*>(textureMapper);
     texMapGL->drawTexture(platformGetTextureID(), TextureMapperGL::ShouldBlend, m_private->size(), targetRect, transform, opacity);
 }
@@ -424,7 +550,7 @@ PassRefPtr<GraphicsSurface> GraphicsSurface::platformCreate(const IntSize& size,
 
     if (!resolveGLMethods())
         return PassRefPtr<GraphicsSurface>();
-    surface->m_private = new GraphicsSurfacePrivate(size, shareContext);
+    surface->m_private = new GraphicsSurfacePrivate(size, shareContext, flags);
 
     return surface;
 }
@@ -438,20 +564,18 @@ PassRefPtr<GraphicsSurface> GraphicsSurface::platformImport(const IntSize& size,
 
     if (!resolveGLMethods())
         return PassRefPtr<GraphicsSurface>();
-    surface->m_private = new GraphicsSurfacePrivate(token.frontBufferHandle, size);
+    surface->m_private = new GraphicsSurfacePrivate(token.frontBufferHandle, size, flags);
 
     return surface;
 }
 
 char* GraphicsSurface::platformLock(const IntRect&, int* /*outputStride*/, LockOptions)
 {
-    // GraphicsSurface is currently only being used for WebGL, which does not require this locking mechanism.
     return 0;
 }
 
 void GraphicsSurface::platformUnlock()
 {
-    // GraphicsSurface is currently only being used for WebGL, which does not require this locking mechanism.
 }
 
 void GraphicsSurface::platformDestroy()
@@ -462,11 +586,20 @@ void GraphicsSurface::platformDestroy()
 
 PassOwnPtr<GraphicsContext> GraphicsSurface::platformBeginPaint(const IntSize&, char*, int)
 {
-    notImplemented();
-    return nullptr;
+    m_private->makeCurrent();
+
+    glBindTexture(GL_TEXTURE_2D, TileGLShared::fbo()->texture());
+    eglImageTargetTexture2DOES(GL_TEXTURE_2D, m_private->m_eglImage);
+    QPainter *painter = new QPainter(TileGLShared::paintDevice());
+    m_private->doneCurrent();
+
+    OwnPtr<GraphicsContext> graphicsContext = adoptPtr(new GraphicsContext(painter));
+    graphicsContext->takeOwnershipOfPlatformContext();
+
+    return graphicsContext.release();
 }
 
-PassRefPtr<Image> GraphicsSurface::createReadOnlyImage(const IntRect&)
+PassRefPtr<Image> GraphicsSurface::createReadOnlyImage(const IntRect& rect)
 {
     notImplemented();
     return 0;

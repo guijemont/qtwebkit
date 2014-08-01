@@ -53,9 +53,9 @@ PassOwnPtr<GraphicsContext> GraphicsSurface::beginPaint(const IntRect& rect, Loc
     return graphicsContext.release();
 }
 
-void GraphicsSurface::copyToGLTexture(uint32_t target, uint32_t texture, const IntRect& targetRect, const IntPoint& offset)
+void GraphicsSurface::copyToGLTexture(uint32_t target, uint32_t texture, const IntRect& targetRect, const IntPoint& offset, const IntSize& targetSize)
 {
-    platformCopyToGLTexture(target, texture, targetRect, offset);
+    platformCopyToGLTexture(target, texture, targetRect, offset, targetSize);
 }
 
 void GraphicsSurface::copyFromTexture(uint32_t texture, const IntRect& sourceRect)
@@ -85,7 +85,6 @@ IntSize GraphicsSurface::size() const
 
 GraphicsSurface::GraphicsSurface(const IntSize&, Flags flags)
     : m_flags(flags)
-    , m_flipTexture(true)
     , m_fbo(0)
     , m_private(0)
 {

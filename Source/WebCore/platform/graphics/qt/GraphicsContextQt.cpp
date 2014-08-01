@@ -55,6 +55,11 @@
 #include "TransformationMatrix.h"
 #include "TransparencyLayer.h"
 
+#ifndef QT_NO_OPENGL
+#include <QOpenGLContext>
+#include <QOpenGLPaintDevice>
+#endif
+
 #include <QBrush>
 #include <QGradient>
 #include <QPaintDevice>
@@ -330,6 +335,19 @@ GraphicsContextPlatformPrivate::~GraphicsContextPlatformPrivate()
 {
     if (!platformContextIsOwned)
         return;
+
+#ifndef QT_NO_OPENGL
+    if (painter->paintEngine()->type() == QPaintEngine::OpenGL2) {
+        QOpenGLContext *previous = QOpenGLContext::currentContext();
+        QOpenGLPaintDevice *device = static_cast<QOpenGLPaintDevice*>(painter->device());
+        device->context()->makeCurrent(device->context()->surface());
+        painter->end();
+        glFlush();
+        delete painter;
+        previous->makeCurrent(previous->surface());
+        return;
+    }
+#endif
 
     QPaintDevice* device = painter->device();
     painter->end();

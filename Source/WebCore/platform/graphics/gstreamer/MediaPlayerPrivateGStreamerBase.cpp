@@ -573,13 +573,6 @@ void MediaPlayerPrivateGStreamerBase::setSize(const IntSize& size)
         return;
 
     m_size = size;
-
-#if USE(GRAPHICS_SURFACE)
-    if (m_surface && m_surface->size() != m_size) {
-        m_surface.clear();
-        m_surface = GraphicsSurface::create(m_size, graphicsSurfaceFlags(), m_context);
-    }
-#endif
 }
 
 void MediaPlayerPrivateGStreamerBase::paint(GraphicsContext* context, const IntRect& rect)

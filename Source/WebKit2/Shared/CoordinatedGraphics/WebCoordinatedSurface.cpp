@@ -106,8 +106,14 @@ PassRefPtr<WebCoordinatedSurface> WebCoordinatedSurface::createWithSurface(const
 PassOwnPtr<WebCore::GraphicsContext> WebCoordinatedSurface::createGraphicsContext(const IntRect& rect)
 {
 #if USE(GRAPHICS_SURFACE)
-    if (isBackedByGraphicsSurface())
-        return m_graphicsSurface->beginPaint(rect, 0 /* Write without retaining pixels*/);
+    if (isBackedByGraphicsSurface()) {
+        OwnPtr<GraphicsContext> graphicsContext = m_graphicsSurface->beginPaint(rect, 0 /* Write without retaining pixels*/);
+#if PLATFORM(QT)
+        graphicsContext->clip(rect);
+        graphicsContext->translate(rect.x(), rect.y());
+#endif
+        return graphicsContext.release();
+    }
 #endif
 
     ASSERT(m_bitmap);
@@ -200,7 +206,7 @@ void WebCoordinatedSurface::copyToTexture(PassRefPtr<WebCore::BitmapTexture> pas
         if (textureGL) {
             uint32_t textureID = textureGL->id();
             uint32_t textureTarget = textureGL->textureTarget();
-            m_graphicsSurface->copyToGLTexture(textureTarget, textureID, target, sourceOffset);
+            m_graphicsSurface->copyToGLTexture(textureTarget, textureID, target, sourceOffset, textureGL->size());
             return;
         }
 
