@@ -261,6 +261,11 @@ void ImageBufferDataPrivateAccelerated::drawPattern(GraphicsContext* destContext
                                                     const FloatRect& destRect, bool ownContext)
 {
     RefPtr<Image> image = StillImage::create(QPixmap::fromImage(toQImage()));
+    if (destContext->isAcceleratedContext()) {
+        // this causes the QOpenGLPaintDevice of the destContext to be bound so we can draw
+        destContext->platformContext()->beginNativePainting();
+        destContext->platformContext()->endNativePainting();
+    }
     image->drawPattern(destContext, srcRect, patternTransform, phase, styleColorSpace, op, destRect);
 }
 
