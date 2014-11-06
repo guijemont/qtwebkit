@@ -69,7 +69,7 @@ HEADERS += \
     $$PWD/qt/Api/qwebsecurityorigin.h \
     $$PWD/qt/Api/qwebsettings.h \
     $$PWD/qt/Api/qwebscriptworld_p.h \
-    $$PWD/qt/qwebcookiejar.h \
+    $$PWD/qt/Api/qwebcookiejar.h \
     $$PWD/qt/Api/qwebkitplatformplugin.h \
     $$PWD/qt/WebCoreSupport/ChromeClientQt.h \
     $$PWD/qt/WebCoreSupport/ContextMenuClientQt.h \
