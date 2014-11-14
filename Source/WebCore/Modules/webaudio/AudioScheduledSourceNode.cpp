@@ -135,6 +135,11 @@ void AudioScheduledSourceNode::updateSchedulingInfo(size_t quantumFrameSize,
     return;
 }
 
+void AudioScheduledSourceNode::start(ExceptionCode& ec)
+{
+    start(0, ec);
+}
+
 void AudioScheduledSourceNode::start(double when, ExceptionCode& ec)
 {
     ASSERT(isMainThread());
@@ -149,6 +154,11 @@ void AudioScheduledSourceNode::start(double when, ExceptionCode& ec)
 
     m_startTime = when;
     m_playbackState = SCHEDULED_STATE;
+}
+
+void AudioScheduledSourceNode::stop(ExceptionCode& ec)
+{
+    stop(0, ec);
 }
 
 void AudioScheduledSourceNode::stop(double when, ExceptionCode& ec)

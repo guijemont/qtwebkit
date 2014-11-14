@@ -44,10 +44,8 @@
     attribute double loopStart;
     attribute double loopEnd;
 
-    [RaisesException] void start(double when);
-    [ImplementedAs=startGrain, RaisesException] void start(double when, double grainOffset);
-    [ImplementedAs=startGrain, RaisesException] void start(double when, double grainOffset, double grainDuration);
-    [RaisesException] void stop(double when);
+    [RaisesException] void start(optional double when, optional double grainOffset, optional double grainDuration);
+    [RaisesException] void stop(optional double when);
 
     [Conditional=LEGACY_WEB_AUDIO] attribute boolean looping; // This is an alias for the .loop attribute for backwards compatibility.
 

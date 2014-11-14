@@ -63,8 +63,10 @@ public:
     unsigned numberOfChannels();
 
     // Play-state
-    void startGrain(double when, double grainOffset, ExceptionCode&);
-    void startGrain(double when, double grainOffset, double grainDuration, ExceptionCode&);
+    void start(ExceptionCode&);
+    void start(double when, ExceptionCode&);
+    void start(double when, double grainOffset, ExceptionCode&);
+    void start(double when, double grainOffset, double grainDuration, ExceptionCode&);
 
 #if ENABLE(LEGACY_WEB_AUDIO)
     void noteGrainOn(double when, double grainOffset, double grainDuration, ExceptionCode&);
@@ -104,6 +106,8 @@ private:
 
     virtual double tailTime() const OVERRIDE { return 0; }
     virtual double latencyTime() const OVERRIDE { return 0; }
+
+    void startPlaying(bool isGrain, double when, double grainOffset, double grainDuration, ExceptionCode&);
 
     // Returns true on success.
     bool renderFromBuffer(AudioBus*, unsigned destinationFrameOffset, size_t numberOfFrames);
