@@ -242,10 +242,6 @@ QWebPage* QGraphicsWebView::page() const
 */
 void QGraphicsWebView::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget*)
 {
-#ifndef QT_NO_OPENGL
-    d->page->d->saveGLContext();
-#endif
-
     QPainter::RenderHints oldHints = painter->renderHints();
     painter->setRenderHints(oldHints | d->renderHints);
 #if USE(TILED_BACKING_STORE)
