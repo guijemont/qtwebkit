@@ -223,7 +223,7 @@ struct GraphicsSurfacePrivate {
         , m_fbo(0)
         , m_flags(flags)
     {
-        if (m_flags & GraphicsSurface::SupportsEGLImagePassthrough) {
+        if (m_flags & GraphicsSurface::IsVideo) {
             m_eglImage = (EGLImageKHR)1;
             return;
         }
@@ -284,7 +284,7 @@ struct GraphicsSurfacePrivate {
     ~GraphicsSurfacePrivate()
     {
         if (!m_isReceiver) {
-            if (m_flags & GraphicsSurface::SupportsEGLImagePassthrough)
+            if (m_flags & GraphicsSurface::IsVideo)
                 return;
 
             makeCurrent();
@@ -336,11 +336,11 @@ struct GraphicsSurfacePrivate {
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            if (!(m_flags & GraphicsSurface::SupportsEGLImagePassthrough))
+            if (!(m_flags & GraphicsSurface::IsVideo))
                 eglImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImage);
         }
 
-        if (m_flags & GraphicsSurface::SupportsEGLImagePassthrough) {
+        if (m_flags & GraphicsSurface::IsVideo) {
             glBindTexture(GL_TEXTURE_2D, m_texture);
             eglImageTargetTexture2DOES(GL_TEXTURE_2D, m_foreignEglImage);
         }
@@ -506,7 +506,7 @@ void GraphicsSurface::platformCopyToGLTexture(uint32_t target, uint32_t id, cons
 
 void GraphicsSurface::platformCopyFromTexture(uint32_t texture, const IntRect& sourceRect)
 {
-    if (flags() & SupportsEGLImagePassthrough)
+    if (flags() & IsVideo)
         m_private->saveEGLImage(texture);
     else
         m_private->copyFromTexture(texture, sourceRect);
@@ -526,7 +526,7 @@ void GraphicsSurface::platformPaintToTextureMapper(TextureMapper* textureMapper,
 
 uint32_t GraphicsSurface::platformFrontBuffer() const
 {
-    if (flags() & SupportsEGLImagePassthrough)
+    if (flags() & IsVideo)
         return *((uint32_t*)&m_private->m_foreignEglImage);
     return 0;
 }

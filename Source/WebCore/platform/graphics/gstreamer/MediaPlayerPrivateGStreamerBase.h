@@ -118,7 +118,7 @@ public:
     virtual IntSize platformLayerSize() const;
     virtual uint32_t copyToGraphicsSurface();
     virtual GraphicsSurfaceToken graphicsSurfaceToken() const;
-    virtual GraphicsSurface::Flags graphicsSurfaceFlags() const { return  GraphicsSurface::SupportsTextureTarget | GraphicsSurface::SupportsSharing | GraphicsSurface::SupportsCopyFromTexture | GraphicsSurface::SupportsEGLImagePassthrough; }
+    virtual GraphicsSurface::Flags graphicsSurfaceFlags() const { return  GraphicsSurface::SupportsTextureTarget | GraphicsSurface::SupportsSharing | GraphicsSurface::SupportsCopyFromTexture | GraphicsSurface::IsVideo; }
 #endif
 #endif
 

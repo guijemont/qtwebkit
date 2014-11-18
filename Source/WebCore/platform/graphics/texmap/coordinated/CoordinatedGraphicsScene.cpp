@@ -195,7 +195,7 @@ void CoordinatedGraphicsScene::syncCanvasIfNeeded(TextureMapperLayer* layer, con
         canvasBackingStore->swapBuffersIfNeeded(state.canvasFrontBuffer);
 
         RefPtr<GraphicsSurface> surface = canvasBackingStore->graphicsSurface();
-        if (surface->flags() & GraphicsSurface::SupportsEGLImagePassthrough) {
+        if (surface->flags() & GraphicsSurface::IsVideo) {
             surface->copyFromTexture(state.canvasFrontBuffer, IntRect(0, 0, 0, 0));
         }
     }
