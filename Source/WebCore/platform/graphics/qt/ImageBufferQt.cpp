@@ -162,10 +162,7 @@ ImageBufferDataPrivateAccelerated::ImageBufferDataPrivateAccelerated(const IntSi
 {
     GLBufferContext::getContext()->makeCurrentIfNeeded();
 
-    QOpenGLFramebufferObjectFormat fboFormat;
-    fboFormat.setSamples(0);
-    fboFormat.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
-    m_fbo = adoptPtr(new QOpenGLFramebufferObject(size, fboFormat));
+    m_fbo = adoptPtr(new QOpenGLFramebufferObject(size, QOpenGLFramebufferObject::CombinedDepthStencil, GL_TEXTURE_2D, GL_RGBA));
     m_fbo->bind();
     m_pdev = adoptPtr(new ImageBufferPaintDevice(this));
 }
