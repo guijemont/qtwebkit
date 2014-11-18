@@ -54,6 +54,10 @@ PannerNode::PannerNode(AudioContext* context, float sampleRate)
     , m_lastGain(-1.0)
     , m_connectionCount(0)
 {
+    // Load the HRTF database asynchronously so we don't block the Javascript thread while creating the HRTF database.
+    m_hrtfDatabaseLoader = HRTFDatabaseLoader::createAndLoadAsynchronouslyIfNecessary(context->sampleRate());
+    m_hrtfDatabaseLoader->waitForLoaderThreadCompletion();
+
     addInput(adoptPtr(new AudioNodeInput(this)));
     addOutput(adoptPtr(new AudioNodeOutput(this, 2)));
 
@@ -103,10 +107,19 @@ void PannerNode::process(size_t framesToProcess)
     }
 
     AudioBus* source = input(0)->bus();
-
     if (!source) {
         destination->zero();
         return;
+    }
+
+    // HRTFDatabase should be loaded before proceeding for offline audio context when panningModel() is "HRTF".
+    if (panningModel() == "HRTF" && !m_hrtfDatabaseLoader->isLoaded()) {
+        if (context()->isOfflineContext())
+            m_hrtfDatabaseLoader->waitForLoaderThreadCompletion();
+        else {
+            destination->zero();
+            return;
+        }
     }
 
     // The audio thread can't block on this lock, so we call tryLock() instead.
@@ -145,7 +158,7 @@ void PannerNode::initialize()
     if (isInitialized())
         return;
 
-    m_panner = Panner::create(m_panningModel, sampleRate(), context()->hrtfDatabaseLoader());
+    m_panner = Panner::create(m_panningModel, sampleRate(), m_hrtfDatabaseLoader.get());
 
     AudioNode::initialize();
 }
@@ -200,7 +213,7 @@ bool PannerNode::setPanningModel(unsigned model)
             // This synchronizes with process().
             MutexLocker processLocker(m_pannerLock);
             
-            OwnPtr<Panner> newPanner = Panner::create(model, sampleRate(), context()->hrtfDatabaseLoader());
+            OwnPtr<Panner> newPanner = Panner::create(model, sampleRate(), m_hrtfDatabaseLoader.get());
             m_panner = newPanner.release();
             m_panningModel = model;
         }
