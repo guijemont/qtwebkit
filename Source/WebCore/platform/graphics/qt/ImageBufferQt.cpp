@@ -79,31 +79,6 @@ struct ImageBufferDataPrivate {
 };
 
 #if ENABLE(ACCELERATED_2D_CANVAS)
-class GLBufferContext : public QOpenGLContext {
-public:
-    static GLBufferContext* getContext() {
-        if (!m_context)
-            m_context = new GLBufferContext;
-        return m_context;
-    }
-
-    void makeCurrentIfNeeded() {
-        if (QOpenGLContext::currentContext() != this)
-            makeCurrent(m_surface);
-    }
-private:
-    GLBufferContext() : m_surface(new QOffscreenSurface) {
-        m_surface->create();
-        setShareContext(GLSharedContext::getContext());
-        create();
-        makeCurrent(m_surface);
-        initializeOpenGLShims();
-    }
-    QOffscreenSurface *m_surface;
-    static GLBufferContext *m_context;
-};
-GLBufferContext* GLBufferContext::m_context = NULL;
-
 
 /*************** accelerated implementation ****************/
 
@@ -149,7 +124,7 @@ public:
 
     void ensureActiveTarget()
     {
-        GLBufferContext::getContext()->makeCurrentIfNeeded();
+        GLSharedContext::makeCurrent();
         m_impl->m_fbo->bind();
         m_impl->m_fboDirty = true;
     }
@@ -160,7 +135,7 @@ private:
 ImageBufferDataPrivateAccelerated::ImageBufferDataPrivateAccelerated(const IntSize& size)
     : m_fboDirty(true)
 {
-    GLBufferContext::getContext()->makeCurrentIfNeeded();
+    GLSharedContext::makeCurrent();
 
     m_fbo = adoptPtr(new QOpenGLFramebufferObject(size, QOpenGLFramebufferObject::CombinedDepthStencil, GL_TEXTURE_2D, GL_RGBA));
     m_fbo->bind();
@@ -170,7 +145,7 @@ ImageBufferDataPrivateAccelerated::ImageBufferDataPrivateAccelerated(const IntSi
 QImage ImageBufferDataPrivateAccelerated::toQImage() const
 {
     QOpenGLContext *previousContext = QOpenGLContext::currentContext();
-    GLBufferContext::getContext()->makeCurrentIfNeeded();
+    GLSharedContext::makeCurrent();
     commitChanges();
     QImage image = m_fbo->toImage();
     previousContext->makeCurrent(previousContext->surface());
@@ -192,7 +167,7 @@ GraphicsSurfaceToken ImageBufferDataPrivateAccelerated::graphicsSurfaceToken() c
 {
     if (!m_graphicsSurface) {
         QOpenGLContext *previousContext = QOpenGLContext::currentContext();
-        GLBufferContext::getContext()->makeCurrentIfNeeded();
+        GLSharedContext::makeCurrent();
 
         GraphicsSurface::Flags flags = GraphicsSurface::SupportsAlpha | GraphicsSurface::SupportsTextureTarget | GraphicsSurface::SupportsSharing;
         m_graphicsSurface = GraphicsSurface::create(m_fbo->size(), flags, QOpenGLContext::currentContext());
@@ -206,7 +181,7 @@ GraphicsSurfaceToken ImageBufferDataPrivateAccelerated::graphicsSurfaceToken() c
 uint32_t ImageBufferDataPrivateAccelerated::copyToGraphicsSurface()
 {
     QOpenGLContext *previousContext = QOpenGLContext::currentContext();
-    GLBufferContext::getContext()->makeCurrentIfNeeded();
+    GLSharedContext::makeCurrent();
     if (!m_graphicsSurface) {
         GraphicsSurface::Flags flags = GraphicsSurface::SupportsAlpha | GraphicsSurface::SupportsTextureTarget | GraphicsSurface::SupportsSharing;
         m_graphicsSurface = GraphicsSurface::create(m_fbo->size(), flags, QOpenGLContext::currentContext());
@@ -238,7 +213,7 @@ void ImageBufferDataPrivateAccelerated::draw(GraphicsContext* destContext, Color
 {
     if (destContext->isAcceleratedContext()) {
         QOpenGLContext *previousContext = QOpenGLContext::currentContext();
-        GLBufferContext::getContext()->makeCurrentIfNeeded();
+        GLSharedContext::makeCurrent();
         commitChanges();
         previousContext->makeCurrent(previousContext->surface());
 
@@ -311,7 +286,7 @@ void ImageBufferDataPrivateAccelerated::paintToTextureMapper(TextureMapper* text
     }
 
     QOpenGLContext *previousContext = QOpenGLContext::currentContext();
-    GLBufferContext::getContext()->makeCurrentIfNeeded();
+    GLSharedContext::makeCurrent();
     commitChanges();
     previousContext->makeCurrent(previousContext->surface());
 
@@ -489,7 +464,7 @@ ImageBuffer::~ImageBuffer()
 {
 #if ENABLE(ACCELERATED_2D_CANVAS)
     QOpenGLContext *previousContext = QOpenGLContext::currentContext();
-    GLBufferContext::getContext()->makeCurrentIfNeeded();
+    GLSharedContext::makeCurrent();
 #endif
     m_data.m_painter->end();
 #if ENABLE(ACCELERATED_2D_CANVAS)

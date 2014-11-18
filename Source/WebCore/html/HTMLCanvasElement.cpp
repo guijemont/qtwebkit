@@ -593,7 +593,7 @@ void HTMLCanvasElement::createImageBuffer() const
     if (renderingMode == Accelerated) {
         QWebPageClient* client = document()->page()->chrome().platformPageClient();
         if (client)
-            GLSharedContext::setContext(client->getOpenGLContextIfAvailable());
+            GLSharedContext::setSharingContext(client->getOpenGLContextIfAvailable());
     }
 #endif
     m_imageBuffer = ImageBuffer::create(size(), m_deviceScaleFactor, ColorSpaceDeviceRGB, renderingMode);
