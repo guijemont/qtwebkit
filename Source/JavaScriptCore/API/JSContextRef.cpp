@@ -28,6 +28,7 @@
 #include "JSContextRefPrivate.h"
 
 #include "APICast.h"
+#include <bytecode/CodeBlock.h>
 #include "InitializeThreading.h"
 #include <interpreter/CallFrame.h>
 #include <interpreter/Interpreter.h>
@@ -224,8 +225,11 @@ JSStringRef JSContextCreateBacktrace(JSContextRef ctx, unsigned maxStackSize)
     Vector<StackFrame> stackTrace;
     Interpreter::getStackTrace(&exec->vm(), stackTrace, maxStackSize);
 
+    // This is a workaround: computeLineAndColumn() triggers an ASSERT for DFG
+    // code.
+    bool ignore_line_num = exec->codeBlock()->getJITType() == JITCode::DFGJIT;
+
     for (size_t i = 0; i < stackTrace.size(); i++) {
-        String urlString;
         String functionName;
         StackFrame& frame = stackTrace[i];
         JSValue function = frame.callee.get();
@@ -239,7 +243,9 @@ JSStringRef JSContextCreateBacktrace(JSContextRef ctx, unsigned maxStackSize)
         }
         unsigned lineNumber;
         unsigned column;
-        frame.computeLineAndColumn(lineNumber, column);
+        if (!ignore_line_num)
+            frame.computeLineAndColumn(lineNumber, column);
+
         if (!builder.isEmpty())
             builder.append('\n');
         builder.append('#');
@@ -247,8 +253,8 @@ JSStringRef JSContextCreateBacktrace(JSContextRef ctx, unsigned maxStackSize)
         builder.append(' ');
         builder.append(functionName);
         builder.appendLiteral("() at ");
-        builder.append(urlString);
-        if (frame.codeType != StackFrameNativeCode) {
+        builder.append(frame.friendlySourceURL());
+        if (frame.codeType != StackFrameNativeCode && !ignore_line_num) {
             builder.append(':');
             builder.appendNumber(lineNumber);
         }

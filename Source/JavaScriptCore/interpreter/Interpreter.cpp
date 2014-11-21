@@ -576,7 +576,7 @@ static StackFrameCodeType getStackFrameCodeType(CallFrame* callFrame)
 
 void StackFrame::computeLineAndColumn(unsigned& line, unsigned& column)
 {
-    if (!codeBlock) {
+    if (!codeBlock || !bytecodeOffset) {
         line = 0;
         column = 0;
         return;
