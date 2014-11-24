@@ -94,6 +94,7 @@ struct ImageBufferDataPrivateAccelerated : public TextureMapperPlatformLayer, pu
     virtual IntSize platformLayerSize() const;
     virtual GraphicsSurfaceToken graphicsSurfaceToken() const;
     virtual uint32_t copyToGraphicsSurface();
+    virtual GraphicsSurface::Flags graphicsSurfaceFlags() const { return GraphicsSurface::SupportsAlpha | GraphicsSurface::SupportsTextureTarget | GraphicsSurface::SupportsSharing | GraphicsSurface::IsCanvas; }
 #endif
     void commitChanges() const;
     void draw(GraphicsContext* destContext, ColorSpace styleColorSpace, const FloatRect& destRect,
@@ -169,8 +170,7 @@ GraphicsSurfaceToken ImageBufferDataPrivateAccelerated::graphicsSurfaceToken() c
         QOpenGLContext *previousContext = QOpenGLContext::currentContext();
         GLSharedContext::makeCurrent();
 
-        GraphicsSurface::Flags flags = GraphicsSurface::SupportsAlpha | GraphicsSurface::SupportsTextureTarget | GraphicsSurface::SupportsSharing;
-        m_graphicsSurface = GraphicsSurface::create(m_fbo->size(), flags, QOpenGLContext::currentContext());
+        m_graphicsSurface = GraphicsSurface::create(m_fbo->size(), graphicsSurfaceFlags(), QOpenGLContext::currentContext());
 
         previousContext->makeCurrent(previousContext->surface());
     }
@@ -183,8 +183,7 @@ uint32_t ImageBufferDataPrivateAccelerated::copyToGraphicsSurface()
     QOpenGLContext *previousContext = QOpenGLContext::currentContext();
     GLSharedContext::makeCurrent();
     if (!m_graphicsSurface) {
-        GraphicsSurface::Flags flags = GraphicsSurface::SupportsAlpha | GraphicsSurface::SupportsTextureTarget | GraphicsSurface::SupportsSharing;
-        m_graphicsSurface = GraphicsSurface::create(m_fbo->size(), flags, QOpenGLContext::currentContext());
+        m_graphicsSurface = GraphicsSurface::create(m_fbo->size(), graphicsSurfaceFlags(), QOpenGLContext::currentContext());
     }
 
     commitChanges();
