@@ -76,6 +76,7 @@ public:
     virtual IntSize platformLayerSize() const;
     virtual uint32_t copyToGraphicsSurface();
     virtual GraphicsSurfaceToken graphicsSurfaceToken() const;
+    virtual GraphicsSurface::Flags graphicsSurfaceFlags() const { return GraphicsSurface::SupportsTextureTarget | GraphicsSurface::SupportsSharing | GraphicsSurface::IsWebGL; }
 #endif
 
     QRectF boundingRect() const;
@@ -92,7 +93,6 @@ public:
     PlatformGraphicsContext3D m_platformContext;
     QObject* m_surfaceOwner;
 #if USE(GRAPHICS_SURFACE)
-    GraphicsSurface::Flags m_surfaceFlags;
     RefPtr<GraphicsSurface> m_graphicsSurface;
 #endif
 };
@@ -149,11 +149,8 @@ GraphicsContext3DPrivate::GraphicsContext3DPrivate(GraphicsContext3D* context, H
 
 #if USE(GRAPHICS_SURFACE)
     IntSize surfaceSize(m_context->m_currentWidth, m_context->m_currentHeight);
-    m_surfaceFlags = GraphicsSurface::SupportsTextureTarget
-                    | GraphicsSurface::SupportsSharing;
-
     if (!surfaceSize.isEmpty())
-        m_graphicsSurface = GraphicsSurface::create(surfaceSize, m_surfaceFlags, m_platformContext);
+        m_graphicsSurface = GraphicsSurface::create(surfaceSize, graphicsSurfaceFlags(), m_platformContext);
 #endif
 }
 
@@ -386,7 +383,7 @@ void GraphicsContext3DPrivate::createGraphicsSurfaces(const IntSize& size)
     if (size.isEmpty())
         m_graphicsSurface.clear();
     else
-        m_graphicsSurface = GraphicsSurface::create(size, m_surfaceFlags, m_platformContext);
+        m_graphicsSurface = GraphicsSurface::create(size, graphicsSurfaceFlags(), m_platformContext);
 #endif
 }
 
