@@ -16,6 +16,7 @@
 #include <QOpenGLContext>
 #include <private/qopenglpaintengine_p.h>
 #include "OpenGLShims.h"
+#include "GLSharedContext.h"
 
 namespace WebCore {
 
@@ -156,27 +157,6 @@ private:
 class TileGLShared
 {
 public:
-    static void setShareContext (QOpenGLContext *shareContext) {
-        m_shareContext = shareContext;
-    }
-
-    static QOpenGLContext* context() {
-        if (!m_context) {
-            m_context = new QOpenGLContext();
-            m_context->setShareContext(m_shareContext);
-            m_context->create();
-        }
-        return m_context;
-    }
-
-    static QOffscreenSurface* surface() {
-        if (!m_surface) {
-            m_surface = new QOffscreenSurface();
-            m_surface->create();
-        }
-        return m_surface;
-    }
-
     static void setSize(IntSize& size) {
         m_size = size;
     }
@@ -190,23 +170,17 @@ public:
 
     static GraphicsSurfacePaintDevice* paintDevice() {
         if (!m_paintDevice) {
-            m_paintDevice = new GraphicsSurfacePaintDevice(m_size, m_context, m_surface, m_fbo);
+            m_paintDevice = new GraphicsSurfacePaintDevice(m_size, GLSharedContext::context(), GLSharedContext::surface(), m_fbo);
         }
         return m_paintDevice;
     }
 
 private:
     static IntSize m_size;
-    static QOpenGLContext *m_context;
-    static QOpenGLContext *m_shareContext;
-    static QOffscreenSurface *m_surface;
     static QOpenGLFramebufferObject *m_fbo;
     static GraphicsSurfacePaintDevice *m_paintDevice;
 };
 IntSize TileGLShared::m_size;
-QOpenGLContext* TileGLShared::m_context = NULL;
-QOpenGLContext* TileGLShared::m_shareContext = NULL;
-QOffscreenSurface* TileGLShared::m_surface = NULL;
 QOpenGLFramebufferObject *TileGLShared::m_fbo = NULL;
 GraphicsSurfacePaintDevice* TileGLShared::m_paintDevice = NULL;
 
@@ -222,28 +196,45 @@ struct GraphicsSurfacePrivate {
         , m_previousContext(0)
         , m_fbo(0)
         , m_flags(flags)
+        , m_prevFBO(0)
+        , m_prevSrcRGB(0)
+        , m_prevSrcAlpha(0)
+        , m_prevDstRGB(0)
+        , m_prevDstAlpha(0)
     {
+        // we don't need to copy video frames, we already have an EGLImage
         if (m_flags & GraphicsSurface::IsVideo) {
             m_eglImage = (EGLImageKHR)1;
             return;
         }
 
+        // we use the shared gl context to copy the canvas content
+        if (m_flags & GraphicsSurface::IsCanvas) {
+            m_context = GLSharedContext::context();
+            m_surface = GLSharedContext::surface();
+            makeCurrent();
+        }
+
+        // for tiles we use the shared gl context as well
         if (m_flags & GraphicsSurface::SupportsCopyToTexture) {
-            TileGLShared::setShareContext(shareContext);
             TileGLShared::setSize(size);
-            m_context = TileGLShared::context();
-            m_surface = TileGLShared::surface();
-        } else {
+            m_context = GLSharedContext::context();
+            m_surface = GLSharedContext::surface();
+            makeCurrent();
+        }
+
+        // for webgl we need to create a new gl context sharing with the webgl one
+        if (m_flags & GraphicsSurface::IsWebGL) {
             m_surface = new QOffscreenSurface;
             m_surface->create();
 
             m_context = new QOpenGLContext;
             m_context->setShareContext(shareContext);
             m_context->create();
+            makeCurrent();
+            initializeOpenGLShims();
         }
 
-        makeCurrent();
-        initializeOpenGLShims();
 
         glGenTextures(1, &m_texture);
         glBindTexture(GL_TEXTURE_2D, m_texture);
@@ -257,11 +248,12 @@ struct GraphicsSurfacePrivate {
         if (m_eglImage == EGL_NO_IMAGE_KHR)
             return;
 
-        if (!(m_flags & GraphicsSurface::SupportsCopyToTexture)) {
+        if (m_flags & (GraphicsSurface::IsCanvas | GraphicsSurface::IsWebGL)) {
+            saveContextStatus();
             glGenFramebuffers(1, &m_fbo);
             glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_texture, 0);
-            glViewport(0, 0, m_size.width(), m_size.height());
+            restoreContextStatus();
         }
 
         doneCurrent();
@@ -278,6 +270,11 @@ struct GraphicsSurfacePrivate {
         , m_previousContext(0)
         , m_fbo(0)
         , m_flags(flags)
+        , m_prevFBO(0)
+        , m_prevSrcRGB(0)
+        , m_prevSrcAlpha(0)
+        , m_prevDstRGB(0)
+        , m_prevDstAlpha(0)
     {
     }
 
@@ -290,11 +287,14 @@ struct GraphicsSurfacePrivate {
             makeCurrent();
             eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImage);
             glDeleteTextures(1, &m_texture);
-            if (m_flags & GraphicsSurface::SupportsCopyToTexture)
-                doneCurrent();
-            else {
+
+            if (m_flags & (GraphicsSurface::IsCanvas | GraphicsSurface::IsWebGL)) {
                 glDeleteFramebuffers(1, &m_fbo);
-                doneCurrent();
+            }
+
+            doneCurrent();
+
+            if (m_flags & GraphicsSurface::IsWebGL) {
                 delete m_context;
                 m_surface->destroy();
                 delete m_surface;
@@ -312,8 +312,12 @@ struct GraphicsSurfacePrivate {
     {
         makeCurrent();
 
+        saveContextStatus();
+        glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
         glBlendFunc(GL_ONE, GL_ZERO);
+        glViewport(0, 0, m_size.width(), m_size.height());
         paintWithShader(texture, sourceRect, IntPoint(0, 0), m_size, true); 
+        restoreContextStatus();
 
         doneCurrent();
     }
@@ -376,25 +380,21 @@ struct GraphicsSurfacePrivate {
             m_surface = static_cast<QOffscreenSurface*>(m_context->surface());
         }
 
-        GLint previousFBO;
         GLuint fbo;
         uint32_t origin = textureId();
 
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFBO);
+        saveContextStatus();
+
+        glBlendFunc(GL_ONE, GL_ZERO);
+        glViewport(0, 0, targetSize.width(), targetSize.height());
         glGenFramebuffers(1, &fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, id, 0);
 
-        glBlendFunc(GL_ONE, GL_ZERO);
-
-        GLint viewport[4];
-        glGetIntegerv(GL_VIEWPORT, viewport);
-        glViewport(0, 0, targetSize.width(), targetSize.height());
         paintWithShader(origin, targetRect, offset, targetSize);
 
-        glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
-        glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
         glDeleteFramebuffers(1, &fbo);
+        restoreContextStatus();
     }
 
     void paintWithShader(uint32_t texture, const IntRect& targetRect, const IntPoint& offset, const IntSize& targetSize, bool flip = false)
@@ -461,6 +461,23 @@ struct GraphicsSurfacePrivate {
         glBindTexture(GL_TEXTURE_2D, 0);
     }
 
+    void saveContextStatus()
+    {
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &m_prevFBO);
+        glGetIntegerv(GL_VIEWPORT, m_prevViewport);
+        glGetIntegerv(GL_BLEND_SRC_ALPHA, &m_prevSrcAlpha);
+        glGetIntegerv(GL_BLEND_SRC_RGB, &m_prevSrcRGB);
+        glGetIntegerv(GL_BLEND_DST_ALPHA, &m_prevDstAlpha);
+        glGetIntegerv(GL_BLEND_DST_RGB, &m_prevDstRGB);
+    }
+
+    void restoreContextStatus()
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, m_prevFBO);
+        glViewport(m_prevViewport[0], m_prevViewport[1], m_prevViewport[2], m_prevViewport[3]);
+        glBlendFuncSeparate(m_prevSrcRGB, m_prevDstRGB, m_prevSrcAlpha, m_prevDstAlpha);
+    }
+
     bool m_isReceiver;
     IntSize m_size;
     QOffscreenSurface *m_surface;
@@ -471,6 +488,12 @@ struct GraphicsSurfacePrivate {
     QOpenGLContext *m_previousContext;
     GLuint m_fbo;
     GraphicsSurface::Flags m_flags;
+    GLint m_prevFBO;
+    GLint m_prevSrcRGB;
+    GLint m_prevSrcAlpha;
+    GLint m_prevDstRGB;
+    GLint m_prevDstAlpha;
+    GLint m_prevViewport[4];
 };
 
 static bool resolveGLMethods()
