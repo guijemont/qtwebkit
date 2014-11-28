@@ -73,12 +73,6 @@
 #include <EGL/egl.h>
 #endif
 
-#if PLATFORM(QT)
-#include <QOffscreenSurface>
-#include <QOpenGLContext>
-#include "GLSharedContext.h"
-#endif
-
 GST_DEBUG_CATEGORY(webkit_media_player_debug);
 #define GST_CAT_DEFAULT webkit_media_player_debug
 
@@ -150,9 +144,6 @@ MediaPlayerPrivateGStreamerBase::MediaPlayerPrivateGStreamerBase(MediaPlayer* pl
     , m_lastRenderedBuffer(0)
     , m_bufferToUnref(0)
     , m_intermediateBuffer(0)
-    , m_offscreenSurface(0)
-    , m_context(0)
-    , m_texture(0)
 #endif
 {
 #if GLIB_CHECK_VERSION(2, 31, 0)
@@ -160,25 +151,6 @@ MediaPlayerPrivateGStreamerBase::MediaPlayerPrivateGStreamerBase(MediaPlayer* pl
     g_mutex_init(m_bufferMutex);
 #else
     m_bufferMutex = g_mutex_new();
-#endif
-
-#if USE(GRAPHICS_SURFACE) && PLATFORM(QT)
-    m_offscreenSurface = new QOffscreenSurface;
-    m_offscreenSurface->create();
-    m_context = new QOpenGLContext;
-    m_context->create();
-    m_context->makeCurrent(m_offscreenSurface);
-    initializeOpenGLShims();
-
-    QOpenGLContext* previousContext = QOpenGLContext::currentContext();
-    m_context->makeCurrent(m_offscreenSurface);
-    glGenTextures(1, &m_texture);
-    glBindTexture(GL_TEXTURE_2D, m_texture);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    previousContext->makeCurrent(previousContext->surface());
 #endif
 }
 
@@ -240,15 +212,6 @@ MediaPlayerPrivateGStreamerBase::~MediaPlayerPrivateGStreamerBase()
 #if USE(NATIVE_FULLSCREEN_VIDEO)
     if (m_fullscreenVideoController)
         exitFullscreen();
-#endif
-
-#if USE(GRAPHICS_SURFACE) && PLATFORM(QT)
-    QOpenGLContext* previousContext = QOpenGLContext::currentContext();
-    m_context->makeCurrent(m_offscreenSurface);
-    glDeleteTextures(1, &m_texture);
-    previousContext->makeCurrent(previousContext->surface());
-    delete m_context;
-    delete m_offscreenSurface;
 #endif
 }
 
@@ -464,8 +427,7 @@ PassRefPtr<BitmapTexture> MediaPlayerPrivateGStreamerBase::updateTexture(Texture
         texture = textureMapper->acquireTextureFromPool(size);
         const BitmapTextureGL* textureGL = static_cast<const BitmapTextureGL*>(texture.get()); // FIXME
         textureID = textureGL->id();
-    } else
-        textureID = m_texture;
+    }
 
 #if USE(OPENGL_ES_2) && GST_CHECK_VERSION(1, 1, 2)
     GstMemory *mem;
@@ -649,27 +611,18 @@ IntSize MediaPlayerPrivateGStreamerBase::platformLayerSize() const
 uint32_t MediaPlayerPrivateGStreamerBase::copyToGraphicsSurface()
 {
     if (!m_surface) {
-        m_surface = GraphicsSurface::create(m_size, graphicsSurfaceFlags(), m_context);
+        m_surface = GraphicsSurface::create(m_size, graphicsSurfaceFlags());
     }
-
-#if PLATFORM(QT)
-    QOpenGLContext* previousContext = QOpenGLContext::currentContext();
-    if (m_context != previousContext)
-        m_context->makeCurrent(m_offscreenSurface);
-#endif
 
     updateTexture(0);
 
-#if PLATFORM(QT)
-    previousContext->makeCurrent(previousContext->surface());
-#endif
     return m_surface->frontBuffer();
 }
 
 GraphicsSurfaceToken MediaPlayerPrivateGStreamerBase::graphicsSurfaceToken() const
 {
     if (!m_surface) {
-        m_surface = GraphicsSurface::create(m_size, graphicsSurfaceFlags(), m_context);
+        m_surface = GraphicsSurface::create(m_size, graphicsSurfaceFlags());
     }
 
     return m_surface->exportToken();

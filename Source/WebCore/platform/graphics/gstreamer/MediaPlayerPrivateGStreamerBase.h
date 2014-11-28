@@ -167,11 +167,6 @@ protected:
     GstBuffer* m_lastRenderedBuffer;
     GstBuffer* m_bufferToUnref;
     GstBuffer* m_intermediateBuffer;
-#if PLATFORM(QT)
-    QOffscreenSurface* m_offscreenSurface;
-    QOpenGLContext* m_context;
-    uint32_t m_texture;
-#endif
 #endif
     GstElement* m_pipeline;
 };
