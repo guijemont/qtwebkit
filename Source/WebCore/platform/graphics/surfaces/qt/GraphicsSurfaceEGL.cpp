@@ -300,10 +300,8 @@ struct GraphicsSurfacePrivate {
                 delete m_surface;
             }
         } else {
-            makeCurrent();
             if (m_texture)
                 glDeleteTextures(1, &m_texture);
-            doneCurrent();
         }
 
     }
@@ -324,10 +322,6 @@ struct GraphicsSurfacePrivate {
 
     void saveEGLImage(uint32_t image)
     {
-        if (!m_context) {
-            m_context = QOpenGLContext::currentContext();
-            m_surface = static_cast<QOffscreenSurface*>(m_context->surface());
-        }
         m_foreignEglImage = (EGLImageKHR)image;
     }
 
@@ -375,11 +369,6 @@ struct GraphicsSurfacePrivate {
 
     void copyToGLTexture(uint32_t target, uint32_t id, const IntRect& targetRect, const IntPoint& offset, const IntSize& targetSize)
     {
-        if (!m_context) {
-            m_context = QOpenGLContext::currentContext();
-            m_surface = static_cast<QOffscreenSurface*>(m_context->surface());
-        }
-
         GLuint fbo;
         uint32_t origin = textureId();
 
@@ -538,11 +527,6 @@ void GraphicsSurface::platformCopyFromTexture(uint32_t texture, const IntRect& s
 
 void GraphicsSurface::platformPaintToTextureMapper(TextureMapper* textureMapper, const FloatRect& targetRect, const TransformationMatrix& transform, float opacity)
 {
-    if (!m_private->m_context) {
-        m_private->m_context = QOpenGLContext::currentContext();
-        m_private->m_surface = static_cast<QOffscreenSurface*>(m_private->m_context->surface());
-    }
-
     TextureMapperGL* texMapGL = static_cast<TextureMapperGL*>(textureMapper);
     texMapGL->drawTexture(platformGetTextureID(), TextureMapperGL::ShouldBlend, m_private->size(), targetRect, transform, opacity);
 }
