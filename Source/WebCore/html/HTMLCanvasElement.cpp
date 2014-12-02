@@ -56,13 +56,6 @@
 #include "WebGLRenderingContext.h"
 #endif
 
-#if PLATFORM(QT)
-#include "QWebPageClient.h"
-#ifndef QT_NO_OPENGL
-#include "GLSharedContext.h"
-#endif
-#endif
-
 namespace WebCore {
 
 using namespace HTMLNames;
@@ -589,13 +582,6 @@ void HTMLCanvasElement::createImageBuffer() const
         return;
 
     RenderingMode renderingMode = shouldAccelerate(bufferSize) ? Accelerated : Unaccelerated;
-#if PLATFORM(QT)
-    if (renderingMode == Accelerated) {
-        QWebPageClient* client = document()->page()->chrome().platformPageClient();
-        if (client)
-            GLSharedContext::setSharingContext(client->getOpenGLContextIfAvailable());
-    }
-#endif
     m_imageBuffer = ImageBuffer::create(size(), m_deviceScaleFactor, ColorSpaceDeviceRGB, renderingMode);
     if (!m_imageBuffer)
         return;

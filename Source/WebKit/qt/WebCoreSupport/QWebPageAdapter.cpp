@@ -107,6 +107,10 @@
 #include <QTextCharFormat>
 #include <QTouchEvent>
 #include <QWheelEvent>
+#ifndef QT_NO_OPENGL
+#include <QOpenGLContext>
+#include "GLSharedContext.h"
+#endif
 
 #if ENABLE(DISCOVERY)
 #include "NetworkServicesClientQt.h"
@@ -291,6 +295,14 @@ void QWebPageAdapter::initializeWebCorePage()
 
     PageGroup::setShouldTrackVisitedLinks(true);
 }
+
+#ifndef QT_NO_OPENGL
+void QWebPageAdapter::saveGLContext()
+{
+    if (!GLSharedContext::sharingContext())
+        GLSharedContext::setSharingContext(client->getOpenGLContextIfAvailable());
+}
+#endif
 
 QWebPageAdapter::~QWebPageAdapter()
 {
