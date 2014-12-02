@@ -35,16 +35,20 @@
 #include "TextureMapperPlatformLayer.h"
 #endif
 
+#if USE(OPENGL_ES_2)
+#include <GLES2/gl2.h>
+#endif
+
+#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1)
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#endif
+
 typedef struct _GstBuffer GstBuffer;
 typedef struct _GstElement GstElement;
 typedef struct _GstMessage GstMessage;
 typedef struct _GstStreamVolume GstStreamVolume;
 typedef struct _WebKitVideoSink WebKitVideoSink;
-
-#if PLATFORM(QT)
-class QOffscreenSurface;
-class QOpenGLContext;
-#endif
 
 namespace WebCore {
 
@@ -156,6 +160,8 @@ protected:
 #if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL)
 #if USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1)
     PassRefPtr<BitmapTexture> updateTexture(TextureMapper*);
+    EGLImageKHR m_eglImage;
+    GLuint m_canvasTexture;
 #else
     RefPtr<BitmapTexture> m_texture;
 #endif

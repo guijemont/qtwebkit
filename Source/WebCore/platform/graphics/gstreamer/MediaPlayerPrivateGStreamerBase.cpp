@@ -55,12 +55,6 @@
 #include "TextureMapperGL.h"
 #endif
 
-#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && PLATFORM(QT)
-#define GL_GLEXT_PROTOTYPES
-#include "OpenGLShims.h"
-#endif
-
-
 #if USE(OPENGL_ES_2)
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
@@ -75,6 +69,11 @@
 
 GST_DEBUG_CATEGORY(webkit_media_player_debug);
 #define GST_CAT_DEFAULT webkit_media_player_debug
+
+#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && PLATFORM(QT)
+#include "GLSharedContext.h"
+#include <private/qopenglpaintengine_p.h>
+#endif
 
 using namespace std;
 
@@ -212,6 +211,16 @@ MediaPlayerPrivateGStreamerBase::~MediaPlayerPrivateGStreamerBase()
 #if USE(NATIVE_FULLSCREEN_VIDEO)
     if (m_fullscreenVideoController)
         exitFullscreen();
+#endif
+
+#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && PLATFORM(QT)
+    if (m_canvasTexture) {
+        QOpenGLContext *previous = QOpenGLContext::currentContext();
+        GLSharedContext::makeCurrent();
+        glDeleteTextures(1, &m_canvasTexture);
+        if (previous)
+            previous->makeCurrent(previous->surface());
+    }
 #endif
 }
 
@@ -433,15 +442,15 @@ PassRefPtr<BitmapTexture> MediaPlayerPrivateGStreamerBase::updateTexture(Texture
     GstMemory *mem;
     if (gst_buffer_n_memory (m_buffer) >= 1) {
         if ((mem = gst_buffer_peek_memory (m_buffer, 0)) && gst_is_egl_image_memory (mem)) {
+            m_eglImage = gst_egl_image_memory_get_image(mem);
             if (textureMapper) {
                 glActiveTexture (GL_TEXTURE0);
                 glBindTexture (GL_TEXTURE_2D, textureID); // FIXME
-                glEGLImageTargetTexture2DOES (GL_TEXTURE_2D, gst_egl_image_memory_get_image (mem));
+                glEGLImageTargetTexture2DOES (GL_TEXTURE_2D, m_eglImage);
             }
 #if USE(GRAPHICS_SURFACE)
             else {
-                EGLImageKHR image = gst_egl_image_memory_get_image(mem);
-                m_surface->copyFromTexture(*((uint32_t*)&image), IntRect(0, 0, size.width(), size.height()));
+                m_surface->copyFromTexture(*((uint32_t*)&m_eglImage), IntRect(0, 0, size.width(), size.height()));
             }
 #endif
             g_mutex_unlock(m_bufferMutex);
@@ -539,7 +548,7 @@ void MediaPlayerPrivateGStreamerBase::setSize(const IntSize& size)
 
 void MediaPlayerPrivateGStreamerBase::paint(GraphicsContext* context, const IntRect& rect)
 {
-#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL)
+#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && !USE(COORDINATED_GRAPHICS)
     if (client())
         return;
 #endif
@@ -549,6 +558,24 @@ void MediaPlayerPrivateGStreamerBase::paint(GraphicsContext* context, const IntR
 
     if (!m_player->visible())
         return;
+
+#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && PLATFORM(QT)
+    if (context->isAcceleratedContext()) {
+        if (!m_canvasTexture) {
+            //No need to set a gl context cause inside this call we are in the canvas context, which is the shared one
+            glGenTextures(1, &m_canvasTexture);
+            glBindTexture(GL_TEXTURE_2D, m_canvasTexture);
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        }
+        glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImage);
+        QOpenGL2PaintEngineEx* acceleratedPaintEngine = static_cast<QOpenGL2PaintEngineEx*>(context->platformContext()->paintEngine());
+        acceleratedPaintEngine->drawTexture(FloatRect(rect), m_canvasTexture, m_size, FloatRect(0, 0, m_size.width(), m_size.height()));
+        return;
+    }
+#endif
 
     g_mutex_lock(m_bufferMutex);
     if (!m_buffer) {
