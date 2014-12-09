@@ -176,6 +176,7 @@ MediaPlayerPrivateGStreamerBase::~MediaPlayerPrivateGStreamerBase()
         gst_buffer_unref(m_buffer);
     m_buffer = 0;
 
+#if USE(GRAPHICS_SURFACE)
     if (m_lastRenderedBuffer)
         gst_buffer_unref(m_lastRenderedBuffer);
     m_lastRenderedBuffer = 0;
@@ -187,6 +188,7 @@ MediaPlayerPrivateGStreamerBase::~MediaPlayerPrivateGStreamerBase()
     if (m_bufferToUnref)
         gst_buffer_unref(m_bufferToUnref);
     m_bufferToUnref = 0;
+#endif
 
     m_player = 0;
 
