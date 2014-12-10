@@ -639,6 +639,9 @@ IntSize MediaPlayerPrivateGStreamerBase::platformLayerSize() const
 
 uint32_t MediaPlayerPrivateGStreamerBase::copyToGraphicsSurface()
 {
+    if (!m_player->visible())
+        return 0;
+
     if (!m_surface) {
         m_surface = GraphicsSurface::create(m_size, graphicsSurfaceFlags());
     }
