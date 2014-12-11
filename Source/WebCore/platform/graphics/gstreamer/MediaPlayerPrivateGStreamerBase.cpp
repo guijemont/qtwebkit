@@ -571,10 +571,16 @@ void MediaPlayerPrivateGStreamerBase::paint(GraphicsContext* context, const IntR
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, m_canvasTexture);
         }
         glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImage);
+        // paint flipped cause opengl expects the frame upside down
+        QOpenGLPaintDevice* paintDevice = static_cast<QOpenGLPaintDevice*>(context->platformContext()->device());
+        paintDevice->setPaintFlipped(true);
         QOpenGL2PaintEngineEx* acceleratedPaintEngine = static_cast<QOpenGL2PaintEngineEx*>(context->platformContext()->paintEngine());
         acceleratedPaintEngine->drawTexture(FloatRect(rect), m_canvasTexture, m_size, FloatRect(0, 0, m_size.width(), m_size.height()));
+        paintDevice->setPaintFlipped(false);
         return;
     }
 #endif
