@@ -2,6 +2,7 @@
  *  Copyright (C) 2009, 2010 Sebastian Dröge <sebastian.droege@collabora.co.uk>
  *  Copyright (C) 2013 Collabora Ltd.
  *  Copyright (C) 2013 Orange
+ *  Copyright (C) 2014 Sebastian Dröge <sebastian@centricular.com>
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -23,59 +24,45 @@
 
 #if ENABLE(VIDEO) && ENABLE(MEDIA_SOURCE) && USE(GSTREAMER)
 
-#include "GRefPtrGStreamer.h"
-#include "GStreamerVersioning.h"
+#include "GStreamerUtilities.h"
 #include "NotImplemented.h"
 #include "TimeRanges.h"
+
 #include <gst/app/gstappsrc.h>
 #include <gst/gst.h>
 #include <gst/pbutils/missing-plugins.h>
-#include <wtf/gobject/GOwnPtr.h>
 #include <wtf/text/CString.h>
-#include <wtf/MainThread.h>
+#include <wtf/gobject/GOwnPtr.h>
 
-struct MainThreadAppSrcCallbackInfo {
-    MainThreadAppSrcCallbackInfo(WebKitMediaSrc* src, GstElement* appsrc) : src(src), appsrc(appsrc) { }
-    WebKitMediaSrc* src;
-    GstElement* appsrc;
+typedef struct _Source Source;
+struct _Source
+{
+    GstElement* src;
+    // Just for identification
+    WebCore::SourceBufferPrivate* sourceBuffer;
 };
 
-typedef struct _Source {
-    GstElement* appsrc;
-    GstPad* srcpad;
-    gboolean padAdded;
+struct _WebKitMediaSrcPrivate
+{
+    GList* sources;
+    gchar* location;
+    GstClockTime duration;
+    bool haveAppsrc;
+    bool asyncStart;
+    bool noMorePads;
+};
 
-    guint64 offset;
-    guint64 size;
-    gboolean paused;
+enum
+{
+    PROP_0,
+    PROP_LOCATION,
+    PROP_LAST
+};
 
-    guint64 requestedOffset;
-} Source;
-
+static GstStaticPadTemplate srcTemplate = GST_STATIC_PAD_TEMPLATE("src_%u", GST_PAD_SRC,
+    GST_PAD_SOMETIMES, GST_STATIC_CAPS_ANY);
 
 #define WEBKIT_MEDIA_SRC_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), WEBKIT_TYPE_MEDIA_SRC, WebKitMediaSrcPrivate))
-
-struct _WebKitMediaSrcPrivate {
-    gchar* uri;
-    Source sourceVideo;
-    Source sourceAudio;
-    WebCore::MediaPlayer* player;
-    GstElement* playbin;
-    gint64 duration;
-    gboolean seekable;
-    gboolean noMorePad;
-    // TRUE if appsrc's version is >= 0.10.27, see
-    // https://bugzilla.gnome.org/show_bug.cgi?id=609423
-    gboolean haveAppSrc27;
-    guint nbSource;
-};
-
-enum {
-    PropLocation = 1,
-    ProLast
-};
-
-static GstStaticPadTemplate srcTemplate = GST_STATIC_PAD_TEMPLATE("src_%u", GST_PAD_SRC, GST_PAD_SOMETIMES, GST_STATIC_CAPS_ANY);
 
 GST_DEBUG_CATEGORY_STATIC(webkit_media_src_debug);
 #define GST_CAT_DEFAULT webkit_media_src_debug
@@ -86,16 +73,6 @@ static void webKitMediaSrcSetProperty(GObject*, guint propertyId, const GValue*,
 static void webKitMediaSrcGetProperty(GObject*, guint propertyId, GValue*, GParamSpec*);
 static GstStateChangeReturn webKitMediaSrcChangeState(GstElement*, GstStateChange);
 static gboolean webKitMediaSrcQueryWithParent(GstPad*, GstObject*, GstQuery*);
-
-static void webKitMediaAppSrcNeedDataCb(GstAppSrc*, guint, gpointer);
-static void webKitMediaAppSrcEnoughDataCb(GstAppSrc*, gpointer);
-static gboolean webKitMediaAppSrcSeekDataCb(GstAppSrc*, guint64, gpointer);
-static GstAppSrcCallbacks appsrcCallbacks = {
-    webKitMediaAppSrcNeedDataCb,
-    webKitMediaAppSrcEnoughDataCb,
-    webKitMediaAppSrcSeekDataCb,
-    { 0 }
-};
 
 #define webkit_media_src_parent_class parent_class
 // We split this out into another macro to avoid a check-webkit-style error.
@@ -115,12 +92,12 @@ static void webkit_media_src_class_init(WebKitMediaSrcClass* klass)
 
     gst_element_class_add_pad_template(eklass, gst_static_pad_template_get(&srcTemplate));
 
-    gst_element_class_set_metadata(eklass, "WebKit Media source element", "Source", "Handles Blob uris", "Stephane Jadaud <sjadaud@sii.fr>");
+    gst_element_class_set_static_metadata(eklass, "WebKit Media source element", "Source", "Handles Blob uris", "Stephane Jadaud <sjadaud@sii.fr>, Sebastian Dröge <sebastian@centricular.com>");
 
     /* Allows setting the uri using the 'location' property, which is used
      * for example by gst_element_make_from_uri() */
     g_object_class_install_property(oklass,
-        PropLocation,
+        PROP_LOCATION,
         g_param_spec_string("location", "location", "Location to read from", 0,
         (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
@@ -129,51 +106,9 @@ static void webkit_media_src_class_init(WebKitMediaSrcClass* klass)
     g_type_class_add_private(klass, sizeof(WebKitMediaSrcPrivate));
 }
 
-static void webKitMediaSrcAddSrc(WebKitMediaSrc* src, GstElement* element)
-{
-    GstPad* ghostPad;
-    WebKitMediaSrcPrivate* priv = src->priv;
-
-    if (!gst_bin_add(GST_BIN(src), element)) {
-        GST_DEBUG_OBJECT(src, "Src element not added");
-        return;
-    }
-    GRefPtr<GstPad> targetsrc = adoptGRef(gst_element_get_static_pad(element, "src"));
-    if (!targetsrc) {
-        GST_DEBUG_OBJECT(src, "Pad not found");
-        return;
-    }
-
-    gst_element_sync_state_with_parent(element);
-    GOwnPtr<gchar> name;
-    name.set(g_strdup_printf("src_%u", priv->nbSource));
-    ghostPad = webkitGstGhostPadFromStaticTemplate(&srcTemplate, name.get(), targetsrc.get());
-    gst_pad_set_active(ghostPad, TRUE);
-
-    priv->nbSource++;
-
-    if (priv->sourceVideo.appsrc == element)
-        priv->sourceVideo.srcpad = ghostPad;
-    else if (priv->sourceAudio.appsrc == element)
-        priv->sourceAudio.srcpad = ghostPad;
-
-    GST_OBJECT_FLAG_SET(ghostPad, GST_PAD_FLAG_NEED_PARENT);
-    gst_pad_set_query_function(ghostPad, webKitMediaSrcQueryWithParent);
-}
-
 static void webkit_media_src_init(WebKitMediaSrc* src)
 {
-    WebKitMediaSrcPrivate* priv = WEBKIT_MEDIA_SRC_GET_PRIVATE(src);
-    src->priv = priv;
-    new (priv) WebKitMediaSrcPrivate();
-
-    priv->sourceVideo.appsrc = gst_element_factory_make("appsrc", "videoappsrc");
-    gst_app_src_set_callbacks(GST_APP_SRC(priv->sourceVideo.appsrc), &appsrcCallbacks, src, 0);
-    webKitMediaSrcAddSrc(src, priv->sourceVideo.appsrc);
-
-    priv->sourceAudio.appsrc = gst_element_factory_make("appsrc", "audioappsrc");
-    gst_app_src_set_callbacks(GST_APP_SRC(priv->sourceAudio.appsrc), &appsrcCallbacks, src, 0);
-    webKitMediaSrcAddSrc(src, priv->sourceAudio.appsrc);
+    src->priv = WEBKIT_MEDIA_SRC_GET_PRIVATE(src);
 }
 
 static void webKitMediaSrcFinalize(GObject* object)
@@ -181,8 +116,8 @@ static void webKitMediaSrcFinalize(GObject* object)
     WebKitMediaSrc* src = WEBKIT_MEDIA_SRC(object);
     WebKitMediaSrcPrivate* priv = src->priv;
 
-    g_free(priv->uri);
-    priv->~WebKitMediaSrcPrivate();
+    // TODO: Free sources
+    g_free(priv->location);
 
     GST_CALL_PARENT(G_OBJECT_CLASS, finalize, (object));
 }
@@ -190,8 +125,9 @@ static void webKitMediaSrcFinalize(GObject* object)
 static void webKitMediaSrcSetProperty(GObject* object, guint propId, const GValue* value, GParamSpec* pspec)
 {
     WebKitMediaSrc* src = WEBKIT_MEDIA_SRC(object);
+
     switch (propId) {
-    case PropLocation:
+    case PROP_LOCATION:
         gst_uri_handler_set_uri(reinterpret_cast<GstURIHandler*>(src), g_value_get_string(value), 0);
         break;
     default:
@@ -207,8 +143,8 @@ static void webKitMediaSrcGetProperty(GObject* object, guint propId, GValue* val
 
     GST_OBJECT_LOCK(src);
     switch (propId) {
-    case PropLocation:
-        g_value_set_string(value, priv->uri);
+    case PROP_LOCATION:
+        g_value_set_string(value, priv->location);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, propId, pspec);
@@ -217,98 +153,22 @@ static void webKitMediaSrcGetProperty(GObject* object, guint propId, GValue* val
     GST_OBJECT_UNLOCK(src);
 }
 
-// must be called on main thread and with object unlocked
-static void webKitMediaVideoSrcStop(WebKitMediaSrc* src)
+static void webKitMediaSrcDoAsyncStart(WebKitMediaSrc* src)
 {
     WebKitMediaSrcPrivate* priv = src->priv;
-    gboolean seeking = FALSE;
-
-    GST_OBJECT_LOCK(src);
-
-    priv->player = 0;
-    priv->playbin = 0;
-
-    priv->sourceVideo.paused = FALSE;
-    priv->sourceVideo.offset = 0;
-    priv->seekable = FALSE;
-
-    priv->duration = 0;
-    priv->nbSource = 0;
-
-    GST_OBJECT_UNLOCK(src);
-
-    if (priv->sourceVideo.appsrc) {
-        gst_app_src_set_caps(GST_APP_SRC(priv->sourceVideo.appsrc), 0);
-        if (!seeking)
-            gst_app_src_set_size(GST_APP_SRC(priv->sourceVideo.appsrc), -1);
-    }
-
-    GST_DEBUG_OBJECT(src, "Stopped request");
+    priv->asyncStart = true;
+    GST_BIN_CLASS(parent_class)->handle_message(GST_BIN(src),
+        gst_message_new_async_start(GST_OBJECT(src)));
 }
 
-static void webKitMediaAudioSrcStop(WebKitMediaSrc* src)
+static void webKitMediaSrcDoAsyncDone(WebKitMediaSrc* src)
 {
     WebKitMediaSrcPrivate* priv = src->priv;
-    gboolean seeking = FALSE;
-
-    GST_OBJECT_LOCK(src);
-
-    priv->player = 0;
-
-    priv->playbin = 0;
-
-    priv->sourceAudio.paused = FALSE;
-
-    priv->sourceAudio.offset = 0;
-
-    priv->seekable = FALSE;
-
-    priv->duration = 0;
-    priv->nbSource = 0;
-
-    GST_OBJECT_UNLOCK(src);
-
-    if (priv->sourceAudio.appsrc) {
-        gst_app_src_set_caps(GST_APP_SRC(priv->sourceAudio.appsrc), 0);
-        if (!seeking)
-            gst_app_src_set_size(GST_APP_SRC(priv->sourceAudio.appsrc), -1);
+    if (priv->asyncStart) {
+        GST_BIN_CLASS(parent_class)->handle_message(GST_BIN(src),
+            gst_message_new_async_done(GST_OBJECT(src), GST_CLOCK_TIME_NONE));
+        priv->asyncStart = false;
     }
-
-    GST_DEBUG_OBJECT(src, "Stopped request");
-}
-
-// must be called on main thread and with object unlocked
-static void webKitMediaVideoSrcStart(WebKitMediaSrc* src)
-{
-    WebKitMediaSrcPrivate* priv = src->priv;
-
-    GST_OBJECT_LOCK(src);
-    if (!priv->uri) {
-        GST_ERROR_OBJECT(src, "No URI provided");
-        GST_OBJECT_UNLOCK(src);
-        webKitMediaVideoSrcStop(src);
-        return;
-    }
-
-    GST_OBJECT_UNLOCK(src);
-    GST_DEBUG_OBJECT(src, "Started request");
-}
-
-// must be called on main thread and with object unlocked
-static void webKitMediaAudioSrcStart(WebKitMediaSrc* src)
-{
-    WebKitMediaSrcPrivate* priv = src->priv;
-
-    GST_OBJECT_LOCK(src);
-    if (!priv->uri) {
-        GST_ERROR_OBJECT(src, "No URI provided");
-        GST_OBJECT_UNLOCK(src);
-        webKitMediaAudioSrcStop(src);
-        return;
-    }
-
-    GST_OBJECT_UNLOCK(src);
-    GST_DEBUG_OBJECT(src, "Started request");
 }
 
 static GstStateChangeReturn webKitMediaSrcChangeState(GstElement* element, GstStateChange transition)
@@ -318,13 +178,9 @@ static GstStateChangeReturn webKitMediaSrcChangeState(GstElement* element, GstSt
     WebKitMediaSrcPrivate* priv = src->priv;
 
     switch (transition) {
-    case GST_STATE_CHANGE_NULL_TO_READY:
-        if (!priv->sourceVideo.appsrc && !priv->sourceAudio.appsrc) {
-            gst_element_post_message(element,
-                gst_missing_element_message_new(element, "appsrc"));
-            GST_ELEMENT_ERROR(src, CORE, MISSING_PLUGIN, (0), ("no appsrc"));
-            return GST_STATE_CHANGE_FAILURE;
-        }
+    case GST_STATE_CHANGE_READY_TO_PAUSED:
+        priv->noMorePads = false;
+        webKitMediaSrcDoAsyncStart(src);
         break;
     default:
         break;
@@ -333,37 +189,17 @@ static GstStateChangeReturn webKitMediaSrcChangeState(GstElement* element, GstSt
     ret = GST_ELEMENT_CLASS(parent_class)->change_state(element, transition);
     if (G_UNLIKELY(ret == GST_STATE_CHANGE_FAILURE)) {
         GST_DEBUG_OBJECT(src, "State change failed");
+        webKitMediaSrcDoAsyncDone(src);
         return ret;
     }
 
     switch (transition) {
     case GST_STATE_CHANGE_READY_TO_PAUSED:
-        GST_DEBUG_OBJECT(src, "READY->PAUSED");
-        GST_OBJECT_LOCK(src);
-
-        /*gst_object_ref(src);
-        priv->sourceVideo.start.schedule("[WebKit] webKitMediaVideoSrcStart", std::function<void()>(std::bind(webKitMediaVideoSrcStart, src)), G_PRIORITY_DEFAULT,
-            [src] { gst_object_unref(src); });
-
-        gst_object_ref(src);
-        priv->sourceAudio.start.schedule("[WebKit] webKitMediaAudioSrcStart", std::function<void()>(std::bind(webKitMediaAudioSrcStart, src)), G_PRIORITY_DEFAULT,
-            [src] { gst_object_unref(src); });
-
-        GST_OBJECT_UNLOCK(src);*/
+        ret = GST_STATE_CHANGE_ASYNC;
         break;
     case GST_STATE_CHANGE_PAUSED_TO_READY:
-        GST_DEBUG_OBJECT(src, "PAUSED->READY");
-        GST_OBJECT_LOCK(src);
-
-        /*gst_object_ref(src);
-        priv->sourceVideo.stop.schedule("[WebKit] webKitMediaVideoSrcStop", std::function<void()>(std::bind(webKitMediaVideoSrcStop, src)), G_PRIORITY_DEFAULT,
-            [src] { gst_object_unref(src); });
-
-        gst_object_ref(src);
-        priv->sourceAudio.stop.schedule("[WebKit] webKitMediaAudioSrcStop", std::function<void()>(std::bind(webKitMediaAudioSrcStop, src)), G_PRIORITY_DEFAULT,
-            [src] { gst_object_unref(src); });*/
-
-        GST_OBJECT_UNLOCK(src);
+        webKitMediaSrcDoAsyncDone(src);
+        priv->noMorePads = false;
         break;
     default:
         break;
@@ -391,14 +227,13 @@ static gboolean webKitMediaSrcQueryWithParent(GstPad* pad, GstObject* parent, Gs
         GST_OBJECT_UNLOCK(src);
         break;
     }
-    case GST_QUERY_URI: {
+    case GST_QUERY_URI:
         GST_OBJECT_LOCK(src);
-        gst_query_set_uri(query, src->priv->uri);
+        gst_query_set_uri(query, src->priv->location);
         GST_OBJECT_UNLOCK(src);
         result = TRUE;
         break;
-    }
-    default: {
+    default:{
         GRefPtr<GstPad> target = adoptGRef(gst_ghost_pad_get_target(GST_GHOST_PAD_CAST(pad)));
         // Forward the query to the proxy target pad.
         if (target)
@@ -428,7 +263,7 @@ static gchar* webKitMediaSrcGetUri(GstURIHandler* handler)
     gchar* ret;
 
     GST_OBJECT_LOCK(src);
-    ret = g_strdup(src->priv->uri);
+    ret = g_strdup(src->priv->location);
     GST_OBJECT_UNLOCK(src);
     return ret;
 }
@@ -437,14 +272,15 @@ static gboolean webKitMediaSrcSetUri(GstURIHandler* handler, const gchar* uri, G
 {
     WebKitMediaSrc* src = WEBKIT_MEDIA_SRC(handler);
     WebKitMediaSrcPrivate* priv = src->priv;
+
     if (GST_STATE(src) >= GST_STATE_PAUSED) {
         GST_ERROR_OBJECT(src, "URI can only be set in states < PAUSED");
         return FALSE;
     }
 
     GST_OBJECT_LOCK(src);
-    g_free(priv->uri);
-    priv->uri = 0;
+    g_free(priv->location);
+    priv->location = 0;
     if (!uri) {
         GST_OBJECT_UNLOCK(src);
         return TRUE;
@@ -452,11 +288,10 @@ static gboolean webKitMediaSrcSetUri(GstURIHandler* handler, const gchar* uri, G
 
     WebCore::KURL url(WebCore::KURL(), uri);
 
-    priv->uri = g_strdup(url.string().utf8().data());
+    priv->location = g_strdup(url.string().utf8().data());
     GST_OBJECT_UNLOCK(src);
     return TRUE;
 }
-
 static void webKitMediaSrcUriHandlerInit(gpointer gIface, gpointer)
 {
     GstURIHandlerInterface* iface = (GstURIHandlerInterface *) gIface;
@@ -467,174 +302,169 @@ static void webKitMediaSrcUriHandlerInit(gpointer gIface, gpointer)
     iface->set_uri = webKitMediaSrcSetUri;
 }
 
-static Source* webKitMediaSrcGetSourceForAppSrc (WebKitMediaSrcPrivate* priv, GstElement* appSrc)
-{
-  if (appSrc == priv->sourceVideo.appsrc) {
-    return &priv->sourceVideo;
-  } else if (appSrc == priv->sourceAudio.appsrc) {
-    return &priv->sourceAudio;
-  } else {
-    GST_WARNING_OBJECT (appSrc, "could not locate matching source");
-    return 0;
-  }
-}
-
-// appsrc callbacks
-static void webKitMediaAppSrcNeedDataMainCb(void* invocation)
-{
-    MainThreadAppSrcCallbackInfo* info = static_cast<MainThreadAppSrcCallbackInfo*>(invocation);
-    Source* source = webKitMediaSrcGetSourceForAppSrc (info->src->priv, info->appsrc);
-
-    source->paused = FALSE;
-}
-
-static void webKitMediaAppSrcNeedDataCb(GstAppSrc* appsrc, guint length, gpointer userData)
-{
-    WebKitMediaSrc* src = WEBKIT_MEDIA_SRC(userData);
-
-    GST_DEBUG_OBJECT(src, "Need more data: %u", length);
-
-    MainThreadAppSrcCallbackInfo info(src, GST_ELEMENT_CAST (appsrc));
-    callOnMainThreadAndWait(webKitMediaAppSrcNeedDataMainCb, &info);
-}
-
-static void webKitMediaAppSrcEnoughDataMainCb(void* invocation)
-{
-    MainThreadAppSrcCallbackInfo* info = static_cast<MainThreadAppSrcCallbackInfo*>(invocation);
-    Source* source = webKitMediaSrcGetSourceForAppSrc (info->src->priv, info->appsrc);
-
-    source->paused = TRUE;
-}
-
-static void webKitMediaAppSrcEnoughDataCb(GstAppSrc* appsrc, gpointer userData)
-{
-    WebKitMediaSrc* src = WEBKIT_MEDIA_SRC(userData);
-
-    GST_DEBUG_OBJECT(src, "Have enough data");
-
-    MainThreadAppSrcCallbackInfo info(src, GST_ELEMENT_CAST (appsrc));
-    callOnMainThreadAndWait(webKitMediaAppSrcEnoughDataMainCb, &info);
-}
-
-static gboolean webKitMediaAppSrcSeekDataCb(GstAppSrc* appsrc, guint64 offset, gpointer userData)
-{
-    WebKitMediaSrc* src = WEBKIT_MEDIA_SRC(userData);
-    WebKitMediaSrcPrivate* priv = src->priv;
-    Source* source = webKitMediaSrcGetSourceForAppSrc (priv, GST_ELEMENT_CAST (appsrc));
-
-    GST_DEBUG_OBJECT(src, "Seeking to offset: %" G_GUINT64_FORMAT, offset);
-    
-    GST_OBJECT_LOCK(src);
-    
-    if (offset == source->offset && source->requestedOffset == source->offset) {
-        GST_OBJECT_UNLOCK(src);
-        return TRUE;
-    }
-
-    if (!priv->seekable) {
-        GST_OBJECT_UNLOCK(src);
-        return FALSE;
-    }
-    if (offset > source->size) {
-        GST_OBJECT_UNLOCK(src);
-        return FALSE;
-    }
-
-    GST_DEBUG_OBJECT(src, "Doing range-request seek");
-    source->requestedOffset = offset;
-
-    GST_OBJECT_UNLOCK(src);
-
-    return TRUE;
-}
-
-void webKitMediaSrcSetMediaPlayer(WebKitMediaSrc* src, WebCore::MediaPlayer* player)
-{
-    WebKitMediaSrcPrivate* priv = src->priv;
-    priv->player = player;
-}
-
-void webKitMediaSrcSetPlayBin(WebKitMediaSrc* src, GstElement* playBin)
-{
-    WebKitMediaSrcPrivate* priv = src->priv;
-    priv->playbin = playBin;
-}
-
-// MediaSourceClient receives notifications from MediaSource
-
-MediaSourceClientGstreamer::MediaSourceClientGstreamer(WebKitMediaSrc* src)
-    : m_src(static_cast<WebKitMediaSrc*>(gst_object_ref(src)))
+namespace WebCore {
+MediaSourceClientGStreamer::MediaSourceClientGStreamer(WebKitMediaSrc* src)
+    : m_src(adoptGRef(static_cast<WebKitMediaSrc*>(gst_object_ref(src))))
 {
 }
 
-MediaSourceClientGstreamer::~MediaSourceClientGstreamer()
+MediaSourceClientGStreamer::~MediaSourceClientGStreamer()
 {
-    gst_object_unref(m_src);
 }
 
-void MediaSourceClientGstreamer::didReceiveDuration(double duration)
+MediaSourcePrivate::AddStatus MediaSourceClientGStreamer::addSourceBuffer(PassRefPtr<SourceBufferPrivate> sourceBufferPrivate, const ContentType& contentType)
 {
     WebKitMediaSrcPrivate* priv = m_src->priv;
-    GST_DEBUG_OBJECT(m_src, "Received duration: %lf", duration);
 
-    GST_OBJECT_LOCK(m_src);
-    priv->duration = duration >= 0.0 ? static_cast<gint64>(duration*GST_SECOND) : 0;
-    GST_OBJECT_UNLOCK(m_src);
+    if (priv->noMorePads) {
+        GST_ERROR_OBJECT(m_src.get(), "Adding new source buffers after first data not supported yet");
+        return MediaSourcePrivate::NotSupported;
+    }
+
+    GST_ERROR_OBJECT(m_src.get(), "State %d", (int)GST_STATE(m_src.get()));
+
+    GST_OBJECT_LOCK(m_src.get());
+
+    Source* source = g_new0(Source, 1);
+    guint numberOfSources = g_list_length(priv->sources);
+    GOwnPtr<gchar> srcName(g_strdup_printf("src%u", numberOfSources));
+
+    source->src = gst_element_factory_make("appsrc", srcName.get());
+    source->sourceBuffer = sourceBufferPrivate.get();
+
+    GOwnPtr<gchar> padName(g_strdup_printf("src_%u", numberOfSources));
+    priv->sources = g_list_prepend(priv->sources, source);
+    GST_OBJECT_UNLOCK(m_src.get());
+
+    priv->haveAppsrc = source->src;
+
+    gst_bin_add(GST_BIN(m_src.get()), source->src);
+    GRefPtr<GstPad> pad = adoptGRef(gst_element_get_static_pad(source->src, "src"));
+    GRefPtr<GstPad> ghostPad = adoptGRef(gst_ghost_pad_new_from_template(padName.get(), pad.get(),
+        gst_static_pad_template_get(&srcTemplate)));
+    gst_pad_set_query_function(ghostPad.get(), webKitMediaSrcQueryWithParent);
+    gst_pad_set_active(ghostPad.get(), TRUE);
+    gst_element_add_pad(GST_ELEMENT(m_src.get()), ghostPad.leakRef());
+
+    gst_element_sync_state_with_parent(source->src);
+
+    return MediaSourcePrivate::Ok;
 }
 
-void MediaSourceClientGstreamer::didReceiveData(const char* data, int length, String type)
+void MediaSourceClientGStreamer::durationChanged(const MediaTime& duration)
+{
+    WebKitMediaSrcPrivate* priv = m_src->priv;
+    GstClockTime gstDuration = gst_util_uint64_scale (duration.timeValue(), GST_SECOND, duration.timeScale());
+
+    GST_DEBUG_OBJECT(m_src.get(), "Received duration: %" GST_TIME_FORMAT, GST_TIME_ARGS(gstDuration));
+
+    GST_OBJECT_LOCK(m_src.get());
+    priv->duration = gstDuration;
+    GST_OBJECT_UNLOCK(m_src.get());
+    gst_element_post_message(GST_ELEMENT(m_src.get()), gst_message_new_duration_changed(GST_OBJECT(m_src.get())));
+}
+
+SourceBufferPrivateClient::AppendResult MediaSourceClientGStreamer::append(PassRefPtr<SourceBufferPrivate> sourceBufferPrivate, const unsigned char* data, unsigned length)
 {
     WebKitMediaSrcPrivate* priv = m_src->priv;
     GstFlowReturn ret = GST_FLOW_OK;
-    GstBuffer * buffer;
+    GstBuffer* buffer;
+    Source* source = 0;
+    GList *l;
 
-    if (type.startsWith("video")) {
-        if (priv->noMorePad == FALSE && priv->sourceVideo.padAdded == TRUE) {
-            gst_element_no_more_pads(GST_ELEMENT(m_src));
-            priv->noMorePad = TRUE;
-        }
-        if (priv->noMorePad == FALSE && priv->sourceVideo.padAdded == FALSE) {
-            gst_element_add_pad(GST_ELEMENT(m_src), priv->sourceVideo.srcpad);
-            priv->sourceVideo.padAdded = TRUE;
-        }
-        GST_OBJECT_LOCK(m_src);
-        buffer = createGstBufferForData(data, length);
-        GST_OBJECT_UNLOCK(m_src);
-
-        ret = gst_app_src_push_buffer(GST_APP_SRC(priv->sourceVideo.appsrc), buffer);
-    } else if (type.startsWith("audio")) {
-        if (priv->noMorePad == FALSE && priv->sourceAudio.padAdded == TRUE) {
-            gst_element_no_more_pads(GST_ELEMENT(m_src));
-            priv->noMorePad = TRUE;
-        }
-        if (priv->noMorePad == FALSE && priv->sourceAudio.padAdded == FALSE) {
-            gst_element_add_pad(GST_ELEMENT(m_src), priv->sourceAudio.srcpad);
-            priv->sourceAudio.padAdded = TRUE;
-        }
-        GST_OBJECT_LOCK(m_src);
-        buffer = createGstBufferForData(data, length);
-        GST_OBJECT_UNLOCK(m_src);
-
-        ret = gst_app_src_push_buffer(GST_APP_SRC(priv->sourceAudio.appsrc), buffer);
+    if (!priv->noMorePads) {
+        priv->noMorePads = true;
+        gst_element_no_more_pads(GST_ELEMENT(m_src.get()));
+        webKitMediaSrcDoAsyncDone(m_src.get());
     }
 
-    if (ret != GST_FLOW_OK && ret != GST_FLOW_EOS)
-        GST_ELEMENT_ERROR(m_src, CORE, FAILED, (0), (0));
+    for (l = priv->sources; l; l = l->next) {
+        Source *tmp = static_cast<Source*>(l->data);
+        if (tmp->sourceBuffer == sourceBufferPrivate.get()) {
+            source = tmp;
+            break;
+        }
+    }
+
+    if (!source || !source->src)
+        return SourceBufferPrivateClient::ReadStreamFailed;
+
+    buffer = gst_buffer_new_and_alloc(length);
+    gst_buffer_fill(buffer, 0, data, length);
+
+    ret = gst_app_src_push_buffer(GST_APP_SRC(source->src), buffer);
+    GST_DEBUG_OBJECT(m_src.get(), "push buffer %d\n", (int)ret);
+
+    if (ret == GST_FLOW_OK)
+        return SourceBufferPrivateClient::AppendSucceeded;
+    else
+        return SourceBufferPrivateClient::ReadStreamFailed;
 }
 
-void MediaSourceClientGstreamer::didFinishLoading(double)
+void MediaSourceClientGStreamer::markEndOfStream(MediaSourcePrivate::EndOfStreamStatus status)
 {
-    GST_DEBUG_OBJECT(m_src, "Have EOS");
-    
-    gst_app_src_end_of_stream(GST_APP_SRC(m_src->priv->sourceVideo.appsrc));
-    gst_app_src_end_of_stream(GST_APP_SRC(m_src->priv->sourceAudio.appsrc));
+    WebKitMediaSrcPrivate* priv = m_src->priv;
+    GList *l;
+
+    GST_DEBUG_OBJECT(m_src.get(), "Have EOS");
+
+    if (!priv->noMorePads) {
+        priv->noMorePads = true;
+        gst_element_no_more_pads(GST_ELEMENT(m_src.get()));
+        webKitMediaSrcDoAsyncDone(m_src.get());
+    }
+
+    for (l = priv->sources; l; l = l->next) {
+        Source *source = static_cast<Source*>(l->data);
+        if (source->src)
+            gst_app_src_end_of_stream(GST_APP_SRC(source->src));
+    }
 }
 
-void MediaSourceClientGstreamer::didFail()
+void MediaSourceClientGStreamer::removedFromMediaSource(PassRefPtr<SourceBufferPrivate> sourceBufferPrivate)
 {
-    gst_app_src_end_of_stream(GST_APP_SRC(m_src->priv->sourceVideo.appsrc));
-    gst_app_src_end_of_stream(GST_APP_SRC(m_src->priv->sourceAudio.appsrc));
+    WebKitMediaSrcPrivate* priv = m_src->priv;
+    Source* source = 0;
+    GList *l;
+
+    for (l = priv->sources; l; l = l->next) {
+        Source *tmp = static_cast<Source*>(l->data);
+        if (tmp->sourceBuffer == sourceBufferPrivate.get()) {
+            source = tmp;
+            break;
+        }
+    }
+
+    if (!source || !source->src)
+        return;
+
+    if (source->src)
+        gst_app_src_end_of_stream(GST_APP_SRC(source->src));
 }
+
+};
+
+namespace WTF {
+template <> GRefPtr<WebKitMediaSrc> adoptGRef(WebKitMediaSrc* ptr)
+{
+    ASSERT(!ptr || !g_object_is_floating(G_OBJECT(ptr)));
+    return GRefPtr<WebKitMediaSrc>(ptr, GRefPtrAdopt);
+}
+
+template <> WebKitMediaSrc* refGPtr<WebKitMediaSrc>(WebKitMediaSrc* ptr)
+{
+    if (ptr)
+        gst_object_ref_sink(GST_OBJECT(ptr));
+
+    return ptr;
+}
+
+template <> void derefGPtr<WebKitMediaSrc>(WebKitMediaSrc* ptr)
+{
+    if (ptr)
+        gst_object_unref(ptr);
+}
+};
 
 #endif // USE(GSTREAMER)
 
