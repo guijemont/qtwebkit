@@ -37,11 +37,17 @@
 
 #if USE(OPENGL_ES_2)
 #include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 #endif
 
-#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1)
+#if USE(EGL)
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#endif
+
+#if PLATFORM(QT)
+#include <QOpenGLFramebufferObject>
+#include <QOpenGLPaintDevice>
 #endif
 
 typedef struct _GstBuffer GstBuffer;
@@ -91,6 +97,7 @@ public:
 
     void triggerRepaint(GstBuffer*);
     void paint(GraphicsContext*, const IntRect&);
+    bool copyVideoTextureToPlatformTexture(GraphicsContext3D*, Platform3DObject, GC3Dint, GC3Denum, GC3Denum, bool, bool);
 
     virtual bool hasSingleSecurityOrigin() const { return true; }
     virtual float maxTimeLoaded() const { return 0.0; }
@@ -157,15 +164,14 @@ protected:
     unsigned long m_muteSignalHandler;
     unsigned long m_drainHandler;
     mutable IntSize m_videoSize;
-#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL)
-#if USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1)
-    PassRefPtr<BitmapTexture> updateTexture(TextureMapper*);
+
+#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && PLATFORM(QT) && USE(EGL)
+    PassRefPtr<BitmapTexture> updateTexture(TextureMapper*, bool offscreen = false);
     EGLImageKHR m_eglImage;
-    GLuint m_canvasTexture;
-#else
-    RefPtr<BitmapTexture> m_texture;
-#endif
-    guint m_orientation;
+    GLuint m_frameTexture;
+    QOpenGLFramebufferObject *m_flipFBO;
+    QOpenGLPaintDevice *m_flipPaintDevice;
+    EGLImageKHR m_flipEGLImage;
 #endif
 
 #if USE(GRAPHICS_SURFACE)
