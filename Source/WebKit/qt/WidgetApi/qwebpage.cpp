@@ -1379,7 +1379,6 @@ QWebPage::ViewportAttributes& QWebPage::ViewportAttributes::operator=(const QWeb
 QWebPage::QWebPage(QObject *parent)
     : QObject(parent)
     , d(new QWebPagePrivate(this))
-    , _overrideUserAgent()
 {
     setView(qobject_cast<QWidget*>(parent));
 
@@ -3181,12 +3180,7 @@ QWebPluginFactory *QWebPage::pluginFactory() const
 */
 QString QWebPage::userAgentForUrl(const QUrl&) const
 {
-    return (_overrideUserAgent.isEmpty() ? QWebPageAdapter::defaultUserAgentString() : _overrideUserAgent);
-}
-
-void QWebPage::defaultUserAgent(const QString& userAgent)
-{
-    _overrideUserAgent = userAgent;
+    return QWebPageAdapter::defaultUserAgentString();
 }
 
 
