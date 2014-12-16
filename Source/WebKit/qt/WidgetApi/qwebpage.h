@@ -335,6 +335,7 @@ public:
     bool swallowContextMenuEvent(QContextMenuEvent *event);
 #endif
     void updatePositionDependentActions(const QPoint &pos);
+    void defaultUserAgent(const QString& userAgent);
 
     QMenu *createStandardContextMenu();
 
@@ -465,6 +466,9 @@ private:
     friend class WebCore::ResourceHandle;
     friend class WebCore::QNetworkReplyHandler;
     friend class DumpRenderTreeSupportQt;
+
+private:
+    QString _overrideUserAgent;
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(QWebPage::FindFlags)
