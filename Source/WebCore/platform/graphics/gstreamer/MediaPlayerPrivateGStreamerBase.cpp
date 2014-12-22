@@ -56,23 +56,18 @@
 #endif
 
 #if USE(OPENGL_ES_2)
-#include <GLES2/gl2.h>
-#include <GLES2/gl2ext.h>
 #if GST_CHECK_VERSION(1, 3, 0)
 #include <gst/gl/egl/gsteglimagememory.h>
 #endif
 #endif
 
-#if USE(EGL)
-#include <EGL/egl.h>
-#endif
-
 GST_DEBUG_CATEGORY(webkit_media_player_debug);
 #define GST_CAT_DEFAULT webkit_media_player_debug
 
-#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && PLATFORM(QT)
+#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && USE(EGL) &&PLATFORM(QT)
 #include "GLSharedContext.h"
 #include <private/qopenglpaintengine_p.h>
+#include <QPainter>
 #endif
 
 using namespace std;
@@ -138,6 +133,13 @@ MediaPlayerPrivateGStreamerBase::MediaPlayerPrivateGStreamerBase(MediaPlayer* pl
     , m_repaintHandler(0)
     , m_volumeSignalHandler(0)
     , m_muteSignalHandler(0)
+#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && USE(EGL) && PLATFORM(QT)
+    , m_eglImage(EGL_NO_IMAGE_KHR)
+    , m_frameTexture(0)
+    , m_flipFBO(0)
+    , m_flipPaintDevice(0)
+    , m_flipEGLImage(EGL_NO_IMAGE_KHR)
+#endif
 #if USE(GRAPHICS_SURFACE)
     , m_surface(0)
     , m_lastRenderedBuffer(0)
@@ -215,11 +217,18 @@ MediaPlayerPrivateGStreamerBase::~MediaPlayerPrivateGStreamerBase()
         exitFullscreen();
 #endif
 
-#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && PLATFORM(QT)
-    if (m_canvasTexture) {
+#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && PLATFORM(QT) && USE(EGL)
+    if (m_frameTexture) {
         QOpenGLContext *previous = QOpenGLContext::currentContext();
         GLSharedContext::makeCurrent();
-        glDeleteTextures(1, &m_canvasTexture);
+        glDeleteTextures(1, &m_frameTexture);
+
+        if (m_flipFBO) {
+            eglDestroyImageKHR(eglGetCurrentDisplay(), m_flipEGLImage);
+            delete m_flipPaintDevice;
+            delete m_flipFBO;
+        }
+
         if (previous)
             previous->makeCurrent(previous->surface());
     }
@@ -386,9 +395,8 @@ void MediaPlayerPrivateGStreamerBase::muteChanged()
 }
 
 
-#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL)
-#if USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1)
-PassRefPtr<BitmapTexture> MediaPlayerPrivateGStreamerBase::updateTexture(TextureMapper* textureMapper)
+#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && PLATFORM(QT) && USE(EGL)
+PassRefPtr<BitmapTexture> MediaPlayerPrivateGStreamerBase::updateTexture(TextureMapper* textureMapper, bool offscreen)
 {
     g_mutex_lock(m_bufferMutex);
     if (!m_buffer) {
@@ -397,7 +405,7 @@ PassRefPtr<BitmapTexture> MediaPlayerPrivateGStreamerBase::updateTexture(Texture
     }
 
 #if USE(GRAPHICS_SURFACE)
-    if (!textureMapper) {
+    if (!offscreen && !textureMapper) {
         if (m_lastRenderedBuffer == m_buffer) {
             g_mutex_unlock(m_bufferMutex);
             return 0;
@@ -434,18 +442,20 @@ PassRefPtr<BitmapTexture> MediaPlayerPrivateGStreamerBase::updateTexture(Texture
 
     RefPtr<BitmapTexture> texture;
     uint32_t textureID;
-    if (textureMapper) {
-        texture = textureMapper->acquireTextureFromPool(size);
-        const BitmapTextureGL* textureGL = static_cast<const BitmapTextureGL*>(texture.get()); // FIXME
-        textureID = textureGL->id();
-    }
 
 #if USE(OPENGL_ES_2) && GST_CHECK_VERSION(1, 1, 2)
     GstMemory *mem;
     if (gst_buffer_n_memory (m_buffer) >= 1) {
         if ((mem = gst_buffer_peek_memory (m_buffer, 0)) && gst_is_egl_image_memory (mem)) {
             m_eglImage = gst_egl_image_memory_get_image(mem);
+            if (offscreen) {
+                g_mutex_unlock(m_bufferMutex);
+                return 0;
+            }
             if (textureMapper) {
+                texture = textureMapper->acquireTextureFromPool(size);
+                const BitmapTextureGL* textureGL = static_cast<const BitmapTextureGL*>(texture.get()); // FIXME
+                textureID = textureGL->id();
                 glActiveTexture (GL_TEXTURE0);
                 glBindTexture (GL_TEXTURE_2D, textureID); // FIXME
                 glEGLImageTargetTexture2DOES (GL_TEXTURE_2D, m_eglImage);
@@ -499,7 +509,6 @@ PassRefPtr<BitmapTexture> MediaPlayerPrivateGStreamerBase::updateTexture(Texture
 #endif
     return 0;
 }
-#endif
 #endif
 
 void MediaPlayerPrivateGStreamerBase::triggerRepaint(GstBuffer* buffer)
@@ -561,25 +570,31 @@ void MediaPlayerPrivateGStreamerBase::paint(GraphicsContext* context, const IntR
     if (!m_player->visible())
         return;
 
-#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && PLATFORM(QT)
+#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && PLATFORM(QT) && USE(EGL)
     if (context->isAcceleratedContext()) {
-        if (!m_canvasTexture) {
+        updateTexture(0, true);
+
+        // if we cannot get the video size we cannot perform the copy so exit
+        if (naturalSize().isEmpty())
+            return;
+
+        if (!m_frameTexture) {
             //No need to set a gl context cause inside this call we are in the canvas context, which is the shared one
-            glGenTextures(1, &m_canvasTexture);
-            glBindTexture(GL_TEXTURE_2D, m_canvasTexture);
+            glGenTextures(1, &m_frameTexture);
+            glBindTexture(GL_TEXTURE_2D, m_frameTexture);
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         } else {
-            glBindTexture(GL_TEXTURE_2D, m_canvasTexture);
+            glBindTexture(GL_TEXTURE_2D, m_frameTexture);
         }
         glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImage);
         // paint flipped cause opengl expects the frame upside down
         QOpenGLPaintDevice* paintDevice = static_cast<QOpenGLPaintDevice*>(context->platformContext()->device());
         paintDevice->setPaintFlipped(true);
         QOpenGL2PaintEngineEx* acceleratedPaintEngine = static_cast<QOpenGL2PaintEngineEx*>(context->platformContext()->paintEngine());
-        acceleratedPaintEngine->drawTexture(FloatRect(rect), m_canvasTexture, m_size, FloatRect(0, 0, m_size.width(), m_size.height()));
+        acceleratedPaintEngine->drawTexture(FloatRect(rect), m_frameTexture, m_videoSize, FloatRect(0, 0, m_videoSize.width(), m_videoSize.height()));
         paintDevice->setPaintFlipped(false);
         return;
     }
@@ -612,6 +627,65 @@ void MediaPlayerPrivateGStreamerBase::paint(GraphicsContext* context, const IntR
     g_mutex_unlock(m_bufferMutex);
 }
 
+bool MediaPlayerPrivateGStreamerBase::copyVideoTextureToPlatformTexture(GraphicsContext3D *context, Platform3DObject texture, GC3Dint level, GC3Denum type, GC3Denum internalFormat, bool premultiplyAlpha, bool flipY)
+{
+#if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL) && USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1) && PLATFORM(QT) && USE(EGL)
+    updateTexture(0, true);
+
+    // if we cannot get the video size we cannot perform the copy so exit
+    if (naturalSize().isEmpty())
+        return false;
+
+    // The idea here is to stamp the EGLImage with the frame into a texture, and then copy that texture into a new one with
+    // the content flipped. Then use another EGLImage to put the flipped contents into the target texture, which is in the webgl context
+    QOpenGLContext *prevContext = QOpenGLContext::currentContext();
+    GLSharedContext::makeCurrent();
+
+    if (!m_frameTexture) {
+        glGenTextures(1, &m_frameTexture);
+        glBindTexture(GL_TEXTURE_2D, m_frameTexture);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    } else {
+        glBindTexture(GL_TEXTURE_2D, m_frameTexture);
+    }
+    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImage);
+
+    // if the size of the video changes we need to recreate the stuff for the copy
+    if (m_flipFBO && (IntSize(m_flipFBO->size()) != m_videoSize)) {
+        eglDestroyImageKHR(eglGetCurrentDisplay(), m_flipEGLImage);
+        m_flipEGLImage = 0;
+        delete m_flipPaintDevice;
+        m_flipPaintDevice = 0;
+        delete m_flipFBO;
+        m_flipFBO = 0;
+    }
+
+    if (!m_flipFBO) {
+        m_flipFBO = new QOpenGLFramebufferObject(m_videoSize, QOpenGLFramebufferObject::CombinedDepthStencil, GL_TEXTURE_2D, GL_RGBA);
+        m_flipEGLImage = eglCreateImageKHR(eglGetCurrentDisplay(), eglGetCurrentContext(), EGL_GL_TEXTURE_2D_KHR, (EGLClientBuffer)(m_flipFBO->texture()), NULL);
+        m_flipPaintDevice = new QOpenGLPaintDevice(m_videoSize);
+    }
+
+    m_flipFBO->bind();
+    m_flipPaintDevice->setPaintFlipped(flipY);
+    QPainter p(m_flipPaintDevice);
+    QOpenGL2PaintEngineEx* acceleratedPaintEngine = static_cast<QOpenGL2PaintEngineEx*>(p.paintEngine());
+    acceleratedPaintEngine->drawTexture(FloatRect(0, 0, m_videoSize.width(), m_videoSize.height()), m_frameTexture, m_videoSize, FloatRect(0, 0, m_videoSize.width(), m_videoSize.height()));
+    p.end();
+
+    if (prevContext)
+        prevContext->makeCurrent(prevContext->surface());
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_flipEGLImage);
+
+    return true;
+#endif
+    return false;
+}
+
 #if USE(ACCELERATED_COMPOSITING) && USE(TEXTURE_MAPPER_GL)
 void MediaPlayerPrivateGStreamerBase::paintToTextureMapper(TextureMapper* textureMapper, const FloatRect& targetRect, const TransformationMatrix& modelViewMatrix, float opacity)
 {
@@ -624,14 +698,7 @@ void MediaPlayerPrivateGStreamerBase::paintToTextureMapper(TextureMapper* textur
 #if USE(COORDINATED_GRAPHICS) && defined(GST_API_VERSION_1)
     RefPtr<BitmapTexture> texture = updateTexture(textureMapper);
     if (texture) {
-#if USE(OPENGL_ES_2) && GST_CHECK_VERSION(1, 1, 2)
-        int flags = 0;
-        if (m_orientation == GST_VIDEO_GL_TEXTURE_ORIENTATION_X_NORMAL_Y_FLIP)
-            flags |= TextureMapperGL::ShouldFlipTexture;
-        textureMapper->drawTexture(*texture.get(), targetRect, modelViewMatrix, opacity, flags);
-#else
         textureMapper->drawTexture(*texture.get(), targetRect, modelViewMatrix, opacity);
-#endif
     } else if (!m_isEndReached)
         client()->setPlatformLayerNeedsDisplay();
 #endif
