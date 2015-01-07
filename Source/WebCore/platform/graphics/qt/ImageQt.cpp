@@ -152,6 +152,11 @@ void Image::drawPattern(GraphicsContext* ctxt, const FloatRect& tileRect, const 
     if (!dr.width() || !dr.height() || !tr.width() || !tr.height())
         return;
 
+    QTransform transform(patternTransform);
+    // If the scaled pattern has no size (background-size=0), no need to paint anything.
+    if (transform.type() == QTransform::TxScale && transform.m11() == 0 && transform.m22() == 0)
+        return;
+
     QPixmap pixmap = *framePixmap;
     if (tr.x() || tr.y() || tr.width() != pixmap.width() || tr.height() != pixmap.height())
         pixmap = pixmap.copy(tr);
@@ -161,7 +166,6 @@ void Image::drawPattern(GraphicsContext* ctxt, const FloatRect& tileRect, const 
     ctxt->setCompositeOperation(!pixmap.hasAlpha() && op == CompositeSourceOver ? CompositeCopy : op);
 
     QPainter* p = ctxt->platformContext();
-    QTransform transform(patternTransform);
 
     // If this would draw more than one scaled tile, we scale the pixmap first and then use the result to draw.
     if (transform.type() == QTransform::TxScale && p->transform().type() < QTransform::TxScale) {
