@@ -69,7 +69,7 @@
 #endif
 
 #if !defined(ENABLE_DISCOVERY)
-#define ENABLE_DISCOVERY 1
+#define ENABLE_DISCOVERY 0
 #endif
 
 #if !defined(ENABLE_DRAG_SUPPORT)
