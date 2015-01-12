@@ -51,6 +51,10 @@
 #include <runtime/JSLock.h>
 #include <runtime/Operations.h>
 
+#if PLATFORM(QT)
+#include "QWebPageClient.h"
+#endif
+
 #if ENABLE(WEBGL)    
 #include "WebGLContextAttributes.h"
 #include "WebGLRenderingContext.h"

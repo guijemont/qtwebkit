@@ -6,16 +6,14 @@
 #include "NotImplemented.h"
 #include "TextureMapperGL.h"
 #include <QGuiApplication>
-#include <QOpenGLContext>
-#include <qpa/qplatformnativeinterface.h>
 #include <GLES2/gl2.h>
-#include <opengl/GLDefs.h>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
 #include <QOpenGLFramebufferObject>
 #include <QOpenGLPaintDevice>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
 #include <private/qopenglpaintengine_p.h>
-#include "OpenGLShims.h"
 #include "GLSharedContext.h"
 
 namespace WebCore {
@@ -232,7 +230,6 @@ struct GraphicsSurfacePrivate {
             m_context->setShareContext(shareContext);
             m_context->create();
             makeCurrent();
-            initializeOpenGLShims();
         }
 
 

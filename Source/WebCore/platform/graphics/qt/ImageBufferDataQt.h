@@ -23,12 +23,16 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifndef ImageBufferDataQt_h
+#define ImageBufferDataQt_h
+
 #include "Image.h"
 
+#include <QImage>
+#include <QOpenGLContext>
 #include <QPainter>
-#include <QPixmap>
+#include <QPaintDevice>
 
-#include <wtf/OwnPtr.h>
 #include <wtf/RefPtr.h>
 
 namespace WebCore {
@@ -45,3 +49,5 @@ public:
 };
 
 } // namespace WebCore
+
+#endif

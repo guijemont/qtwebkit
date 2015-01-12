@@ -89,7 +89,8 @@ public:
         WebAudioEnabled,
         RepaintCounter,
         DebugBorder,
-        WebSecurityEnabled
+        WebSecurityEnabled,
+        Accelerated2dCanvasEnabled
     };
     enum WebGraphic {
         MissingImageGraphic,

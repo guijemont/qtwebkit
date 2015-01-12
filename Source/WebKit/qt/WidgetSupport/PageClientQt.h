@@ -175,7 +175,7 @@ public:
 
     virtual bool makeOpenGLContextCurrentIfAvailable();
 #ifndef QT_NO_OPENGL
-    virtual QOpenGLContext* getOpenGLContextIfAvailable();
+    virtual QOpenGLContext* openGLContextIfAvailable();
 #endif
     virtual QRectF windowRect() const;
 

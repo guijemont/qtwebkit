@@ -2244,6 +2244,7 @@ HEADERS += \
 }
 
 HEADERS += \
+    platform/graphics/qt/StillImageQt.h \
     platform/graphics/qt/TransparencyLayer.h \
     platform/graphics/SegmentedFontData.h \
     platform/graphics/ShadowBlur.h \
@@ -2985,6 +2986,12 @@ mac {
 }
 
 contains(QT_CONFIG,icu)|mac: SOURCES += platform/text/TextBreakIteratorICU.cpp
+use?(wchar_unicode): {
+    SOURCES += platform/text/wchar/TextBreakIteratorWchar.cpp \
+               platform/text/TextEncodingDetectorNone.cpp
+    SOURCES -= platform/text/TextEncodingDetectorICU.cpp
+}
+
 mac {
     # For Mac we use the same SmartReplace implementation as the Apple port.
     SOURCES += editing/SmartReplaceCF.cpp
@@ -4245,17 +4252,17 @@ use?(3D_GRAPHICS) {
 
     INCLUDEPATH += $$PWD/platform/graphics/gpu
 
-    contains(QT_CONFIG, opengl) | contains(QT_CONFIG, opengles2) {
-        !contains(QT_CONFIG, opengles2) {
-            INCLUDEPATH += $$QMAKE_INCDIR_OPENGL
-            SOURCES += \
-               platform/graphics/opengl/GraphicsContext3DOpenGL.cpp \
-               platform/graphics/opengl/Extensions3DOpenGL.cpp
-        } else {
+    contains(QT_CONFIG, opengl) {
+        contains(QT_CONFIG, opengles2) {
             INCLUDEPATH += $$QMAKE_INCDIR_OPENGL_ES2
             SOURCES += \
                platform/graphics/opengl/GraphicsContext3DOpenGLES.cpp \
                platform/graphics/opengl/Extensions3DOpenGLES.cpp
+        } else {
+            INCLUDEPATH += $$QMAKE_INCDIR_OPENGL
+            SOURCES += \
+               platform/graphics/opengl/GraphicsContext3DOpenGL.cpp \
+               platform/graphics/opengl/Extensions3DOpenGL.cpp
         }
 
         !isEmpty(QMAKE_INCDIR_EGL): INCLUDEPATH += $$QMAKE_INCDIR_EGL
@@ -4269,7 +4276,6 @@ use?(3D_GRAPHICS) {
 
     WEBKIT += angle
 
-    CONFIG += opengl-shims
     INCLUDEPATH += platform/graphics/gpu
 }
 

@@ -1,5 +1,4 @@
 #include "config.h"
-#include "OpenGLShims.h"
 #include "GLSharedContext.h"
 #include <stdio.h>
 
@@ -44,7 +43,6 @@ void GLSharedContext::initialize()
     m_context->setShareContext(m_sharing);
     m_context->create();
     makeCurrent();
-    initializeOpenGLShims();
 }
 
 QOffscreenSurface* GLSharedContext::m_surface = 0;

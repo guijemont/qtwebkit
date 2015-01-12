@@ -855,6 +855,13 @@ have?(QTQUICK) {
         SOURCES += \
             UIProcess/qt/WebColorPickerQt.cpp
     }
+
+    qtHaveModule(webchannel) {
+        SOURCES += \
+            UIProcess/API/qt/qwebchannelwebkittransport.cpp
+        HEADERS += \
+            UIProcess/API/qt/qwebchannelwebkittransport_p.h
+    }
 }
 
 mac: {
